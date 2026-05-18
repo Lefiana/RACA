@@ -1,0 +1,528 @@
+// File: apps/api/prisma/schema.prisma
+// Purpose: Full database schema — Better Auth owns user/session/account/verification tables.
+//          App-specific fields (role, department, etc.) are extended on top of the Better Auth base.
+//          All domain models reference the Better Auth "user" table via userId.
+// Dependencies: Prisma ORM, PostgreSQL, better-auth/adapters/prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  REQUESTOR
+  ADVISER
+  DEPARTMENT_HEAD
+  MIS
+  BUILDING_ADMIN
+  STUDENT_AFFAIRS
+  ACADEMIC_HEAD
+  SCHOOL_ADMIN
+  SUPER_ADMIN
+}
+
+enum RequestStatus {
+  DRAFT
+  PENDING
+  STAGE1_REVIEW
+  STAGE2_REVIEW
+  PENDING_FINAL
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+}
+
+enum ApprovalStage {
+  STAGE_1_ADVISER
+  STAGE_1_DEPT_HEAD
+  STAGE_2_MIS
+  STAGE_2_BUILDING
+  STAGE_2_HEAD_OF_STUDENT_AFFAIRS
+  STAGE_2_ACADEMIC_HEAD
+  STAGE_3_SCHOOL_ADMIN
+}
+
+enum VenueStatus {
+  AVAILABLE
+  RESERVED
+  MAINTENANCE
+  BLOCKED
+}
+
+enum AssetStatus {
+  AVAILABLE
+  RESERVED
+  CHECKED_OUT
+  MAINTENANCE
+  LOST
+  DAMAGED
+}
+
+enum AssetCondition {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+}
+
+enum CheckoutStatus {
+  ACTIVE
+  RETURNED
+  OVERDUE
+  LOST
+  DAMAGED_ON_RETURN
+}
+
+enum NotificationType {
+  REQUEST_SUBMITTED
+  APPROVAL_REQUIRED
+  REQUEST_APPROVED
+  REQUEST_REJECTED
+  ASSET_DUE
+  ASSET_OVERDUE
+  CONFLICT_DETECTED
+  SYSTEM
+}
+
+// ─────────────────────────────────────────────
+// BETTER AUTH CORE TABLES
+// These four models (User, Session, Account, Verification) are
+// owned and written by Better Auth via the Prisma adapter.
+//
+// IMPORTANT RULES:
+// 1. Table names must be lowercase (@@map("user") not "users")
+//    — Better Auth expects exactly these table names.
+// 2. Do not remove or rename Better Auth's required fields.
+// 3. App-specific fields are safe to add on top.
+// 4. Better Auth manages password hashing inside the Account model —
+//    you never call bcrypt directly.
+// ─────────────────────────────────────────────
+
+model User {
+  // ── Required by Better Auth ───────────────────
+  id            String   @id @default(cuid())
+  name          String   // Better Auth calls this "name" — maps to displayName in our UI
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // ── App-specific extensions ───────────────────
+  // Better Auth ignores these fields; our app reads them.
+  // After a user signs up via Better Auth, a post-hook
+  // sets role = REQUESTOR and isActive = true.
+  username    String?   @unique
+  role        UserRole  @default(REQUESTOR)
+  department  String?
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+  deletedAt   DateTime? // soft delete — never hard delete users
+
+  // ── Better Auth relations ─────────────────────
+  sessions Session[]
+  accounts Account[]
+
+  // ── App relations ─────────────────────────────
+  submittedRequests Request[]       @relation("RequestedBy")
+  approvalSteps     ApprovalStep[]  @relation("ApproverSteps")
+  uploadedFiles     Attachment[]    @relation("UploadedBy")
+  notifications     Notification[]
+  checkoutsHandled  AssetCheckout[] @relation("HandledBy")
+  auditLogs         AuditLog[]      @relation("PerformedBy")
+
+  @@index([role])
+  @@index([deletedAt])
+  @@map("user") // ← Better Auth requires this exact table name
+}
+
+// Better Auth writes sessions here on every sign-in.
+// Session validation on each request reads from this table.
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session") // ← Better Auth requires this exact table name
+}
+
+// Better Auth stores provider credentials here.
+// Local accounts:    providerId = "credential", password = bcrypt hash (managed by Better Auth)
+// Microsoft accounts: providerId = "microsoft", tokens stored here
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   // bcrypt hash — written by Better Auth, never touched by our code
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@map("account") // ← Better Auth requires this exact table name
+}
+
+// Better Auth uses this for email verification tokens, password reset links, etc.
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+  @@map("verification") // ← Better Auth requires this exact table name
+}
+
+// ─────────────────────────────────────────────
+// SYSTEM CONFIG
+// Admin-managed key-value store for institutional settings.
+// No config value is ever hardcoded in application code.
+// ─────────────────────────────────────────────
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@map("system_configs")
+}
+
+// ─────────────────────────────────────────────
+// REQUESTS — core RACA workflow
+// ─────────────────────────────────────────────
+
+model Request {
+  id              String        @id @default(cuid())
+  referenceNumber String        @unique // e.g. RACA-20250515-1042
+  requestedById   String
+
+  // Section I
+  activityTitle String
+  theme         String?
+
+  // Section II
+  objectives String
+
+  // Section III
+  activityStartAt DateTime
+  activityEndAt   DateTime
+
+  // Section IV — free text at submission time
+  // Formal assignment happens via VenueBooking and AssetCheckout relations
+  venueDescription     String?
+  equipmentDescription String?
+
+  // Section V — JSON array [{ name, position, organization }]
+  speakers Json @default("[]")
+
+  // Section VI
+  expectedAudience  String?
+  expectedHeadcount Int?
+
+  remarks     String?
+  status      RequestStatus @default(DRAFT)
+  submittedAt DateTime?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?
+
+  requestedBy    User            @relation("RequestedBy", fields: [requestedById], references: [id])
+  venueBookings  VenueBooking[]
+  assetCheckouts AssetCheckout[]
+  approvalSteps  ApprovalStep[]
+  attachments    Attachment[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+
+  @@index([requestedById])
+  @@index([status])
+  @@index([activityStartAt])
+  @@index([referenceNumber])
+  @@index([deletedAt])
+  @@map("requests")
+}
+
+// ─────────────────────────────────────────────
+// APPROVAL STEPS
+// ─────────────────────────────────────────────
+
+model ApprovalStep {
+  id        String        @id @default(cuid())
+  requestId String
+  stage     ApprovalStage
+  stepOrder Int
+
+  // Live reference — who is assigned to approve this step
+  approverId String?
+  approver   User?   @relation("ApproverSteps", fields: [approverId], references: [id])
+
+  // Snapshot written at decision time — immutable after signing
+  approverName  String?
+  approverRole  String?
+  approverTitle String?
+
+  status          ApprovalStatus @default(PENDING)
+  remarks         String?
+  rejectionReason String?
+  decidedAt       DateTime?
+
+  attachments Attachment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, stage]) // database-level constraint: one step per stage per request
+  @@index([requestId])
+  @@index([approverId])
+  @@index([status])
+  @@map("approval_steps")
+}
+
+// ─────────────────────────────────────────────
+// VENUES
+// ─────────────────────────────────────────────
+
+model Venue {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  description String?
+  building    String?
+  floor       String?
+  capacity    Int
+  status      VenueStatus @default(AVAILABLE)
+  features    String[]
+  imageUrl    String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  deletedAt   DateTime?
+
+  bookings        VenueBooking[]
+  maintenanceLogs MaintenanceLog[]
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("venues")
+}
+
+model VenueBooking {
+  id            String    @id @default(cuid())
+  requestId     String
+  venueId       String
+  startAt       DateTime
+  endAt         DateTime
+  bufferStartAt DateTime  // startAt minus buffer (from SystemConfig)
+  bufferEndAt   DateTime  // endAt plus buffer (from SystemConfig)
+  isLocked      Boolean   @default(false) // true during approval, prevents double-booking
+  confirmedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  venue   Venue   @relation(fields: [venueId], references: [id])
+
+  @@index([venueId, startAt, endAt])
+  @@index([requestId])
+  @@map("venue_bookings")
+}
+
+// ─────────────────────────────────────────────
+// ASSETS
+// ─────────────────────────────────────────────
+
+model Asset {
+  id            String         @id @default(cuid())
+  assetTag      String         @unique
+  name          String
+  description   String?
+  category      String
+  serialNumber  String?        @unique
+  brand         String?
+  model         String?
+  status        AssetStatus    @default(AVAILABLE)
+  condition     AssetCondition @default(GOOD)
+  location      String?
+  qrCode        String?
+  purchasedAt   DateTime?
+  warrantyUntil DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deletedAt     DateTime?
+
+  checkouts       AssetCheckout[]
+  maintenanceLogs MaintenanceLog[]
+
+  @@index([status])
+  @@index([category])
+  @@index([assetTag])
+  @@index([deletedAt])
+  @@map("assets")
+}
+
+model AssetCheckout {
+  id                String          @id @default(cuid())
+  requestId         String
+  assetId           String
+  handledById       String?
+  quantity          Int             @default(1)
+  status            CheckoutStatus  @default(ACTIVE)
+  checkedOutAt      DateTime?
+  dueAt             DateTime?
+  returnedAt        DateTime?
+  conditionOnOut    AssetCondition?
+  conditionOnReturn AssetCondition?
+  damageNotes       String?
+  penaltyNotes      String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  request   Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  asset     Asset   @relation(fields: [assetId], references: [id])
+  handledBy User?   @relation("HandledBy", fields: [handledById], references: [id])
+
+  @@index([requestId])
+  @@index([assetId])
+  @@index([status])
+  @@index([dueAt])
+  @@map("asset_checkouts")
+}
+
+// ─────────────────────────────────────────────
+// MAINTENANCE LOGS
+// ─────────────────────────────────────────────
+
+model MaintenanceLog {
+  id          String    @id @default(cuid())
+  venueId     String?
+  assetId     String?
+  title       String
+  description String?
+  startAt     DateTime
+  endAt       DateTime?
+  resolvedAt  DateTime?
+  loggedById  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  venue Venue? @relation(fields: [venueId], references: [id])
+  asset Asset? @relation(fields: [assetId], references: [id])
+
+  @@index([venueId])
+  @@index([assetId])
+  @@map("maintenance_logs")
+}
+
+// ─────────────────────────────────────────────
+// ATTACHMENTS
+// ─────────────────────────────────────────────
+
+model Attachment {
+  id             String  @id @default(cuid())
+  requestId      String?
+  approvalStepId String?
+  uploadedById   String
+
+  originalName String
+  storedName   String
+  storagePath  String
+  mimeType     String
+  sizeBytes    Int
+  label        String?
+
+  createdAt DateTime @default(now())
+
+  request      Request?      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approvalStep ApprovalStep? @relation(fields: [approvalStepId], references: [id], onDelete: Cascade)
+  uploadedBy   User          @relation("UploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([requestId])
+  @@index([approvalStepId])
+  @@map("attachments")
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  requestId String?
+  type      NotificationType
+  title     String
+  body      String
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  request Request? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([requestId])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOGS — append-only, never updated or deleted
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  performedById String?
+  requestId     String?
+  action        String   // e.g. "REQUEST_SUBMITTED", "STEP_APPROVED", "ASSET_CHECKED_OUT"
+  entity        String   // e.g. "Request", "ApprovalStep", "Asset"
+  entityId      String?
+  snapshot      Json?    // state at the time of action
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  performedBy User?    @relation("PerformedBy", fields: [performedById], references: [id], onDelete: SetNull)
+  request     Request? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([performedById])
+  @@index([requestId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
