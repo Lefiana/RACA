@@ -56,7 +56,7 @@ async function bootstrap() {
 
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
 
-  const port = process.env.PORT ?? 3001;
+  const port = process.env.PORT ?? 6001;
   await app.listen(port);
 
   console.log(`\n🚀 RACA API        → http://localhost:${port}/api/v1`);
