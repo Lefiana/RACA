@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "AssetCustodian" AS ENUM ('MIS', 'BUILDING_ADMIN', 'HRM_CUSTODIAN');
+
+-- AlterEnum
+ALTER TYPE "UserRole" ADD VALUE 'HRM_CUSTODIAN';

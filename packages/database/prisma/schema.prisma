@@ -23,6 +23,7 @@ enum UserRole {
   DEPARTMENT_HEAD
   MIS
   BUILDING_ADMIN
+  HRM_CUSTODIAN
   STUDENT_AFFAIRS
   ACADEMIC_HEAD
   SCHOOL_ADMIN
@@ -63,6 +64,12 @@ enum VenueStatus {
   RESERVED
   MAINTENANCE
   BLOCKED
+}
+
+enum AssetCustodian {
+  MIS
+  BUILDING_ADMIN
+  HRM_CUSTODIAN
 }
 
 enum AssetStatus {

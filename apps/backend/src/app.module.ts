@@ -10,10 +10,11 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { RequestsModule }      from './modules/requests/requests.module';
+import { ApprovalsModule }     from './modules/approvals/approvals.module';
+import { VenuesModule }        from './modules/venues/venues.module';
+import { AssetsModule }        from './modules/assets/assets.module';
+
 // Uncomment as each module is built:
-// import { ApprovalsModule }     from './modules/approvals/approvals.module';
-// import { VenuesModule }        from './modules/venues/venues.module';
-// import { AssetsModule }        from './modules/assets/assets.module';
 // import { NotificationsModule } from './modules/notifications/notifications.module';
 // import { AuditLogsModule }     from './modules/audit-logs/audit-logs.module';
 
@@ -29,6 +30,9 @@ import { RequestsModule }      from './modules/requests/requests.module';
     // AuthModule sets up Better Auth + global AuthGuard + global RolesGuard
     AuthModule,
     RequestsModule,
+    ApprovalsModule,
+    AssetsModule,
+    VenuesModule
   ],
 })
 export class AppModule {}

@@ -18,6 +18,7 @@
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",
     "@types/node": "^22.15.3",
+    "@types/papaparse": "^5.5.2",
     "@types/passport-jwt": "^4.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
@@ -42,6 +43,7 @@
     "class-validator": "^0.15.1",
     "graphql": "^16.14.0",
     "multer": "^2.1.1",
+    "papaparse": "^5.5.3",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
