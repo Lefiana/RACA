@@ -38,7 +38,7 @@ export class QueryAssetDto {
   @IsString()
   search?: string;
 
-  // SUPER_ADMIN/SCHOOL_ADMIN can filter by custodian. Other roles are auto-scoped.
+  // SUPER_ADMIN can filter by custodian. Other roles are auto-scoped.
   @ApiPropertyOptional({ enum: AssetCustodian })
   @IsOptional()
   @IsEnum(AssetCustodian)

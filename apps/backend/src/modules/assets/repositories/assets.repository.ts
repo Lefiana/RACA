@@ -118,13 +118,28 @@ export class AssetsRepository {
     return prisma.assetCheckout.findMany({
       where: {
         status: { in: [CheckoutStatus.ACTIVE, CheckoutStatus.OVERDUE] },
+        // Prisma relation filter: filter through the related Asset's custodianRole
         ...(custodianRole && {
-          asset: { custodianRole },
+          asset: {
+            is: { custodianRole },
+          },
         }),
       },
       include: {
-        asset:   { select: { id: true, name: true, assetTag: true, custodianRole: true } },
-        request: { select: { referenceNumber: true, activityTitle: true, activityStartAt: true } },
+        asset: {
+          select: {
+            id:       true,
+            name:     true,
+            assetTag: true,
+          },
+        },
+        request: {
+          select: {
+            referenceNumber: true,
+            activityTitle:   true,
+            activityStartAt: true,
+          },
+        },
       },
       orderBy: { dueAt: 'asc' },
     });

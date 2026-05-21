@@ -386,6 +386,7 @@ model Asset {
   model         String?
   status        AssetStatus    @default(AVAILABLE)
   condition     AssetCondition @default(GOOD)
+  custodianRole  AssetCustodian @default(MIS)   
   location      String?
   qrCode        String?
   purchasedAt   DateTime?

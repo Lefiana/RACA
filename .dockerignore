@@ -1,0 +1,62 @@
+# Root .dockerignore
+# Covers the entire monorepo build context.
+# Docker will ignore these when copying files into the image.
+
+# Dependencies — reinstalled inside the image
+node_modules
+**/node_modules
+
+# Build outputs — rebuilt inside the image
+dist
+**/dist
+.next
+**/.next
+build
+**/build
+
+# Prisma generated client — regenerated inside the image
+**/generated
+
+# Environment files — never baked into images
+.env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example
+
+# Turborepo cache
+.turbo
+**/.turbo
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Logs
+*.log
+**/logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+**/coverage
+**/__tests__
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker files themselves (no need to copy into image)
+**/Dockerfile
+**/.dockerignore
+docker-compose*.yml

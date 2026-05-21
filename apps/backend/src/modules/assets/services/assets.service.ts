@@ -20,10 +20,13 @@ import {
   UserRole,
 } from '@repo/database';
 
-import { AssetsRepository }  from '../repositories/assets.repository';
-import { CsvImportService }  from './csv-import.service';
-import { CreateAssetDto }    from '../dto/create-asset.dto';
-import { UpdateAssetDto, QueryAssetDto, SetAssetStatusDto, ProcessCheckoutDto } from '../dto/assets.dto';
+import { AssetsRepository }   from '../repositories/assets.repository';
+import { CsvImportService }   from './csv-import.service';
+import { CreateAssetDto }     from '../dto/create-asset.dto';
+import { UpdateAssetDto }     from '../dto/update-asset.dto';
+import { QueryAssetDto }      from '../dto/query-asset.dto';
+import { SetAssetStatusDto }  from '../dto/set-asset-status.dto';
+import { ProcessCheckoutDto } from '../dto/process-checkout.dto';
 
 // Maps UserRole to AssetCustodian for scoping queries
 const ROLE_TO_CUSTODIAN: Partial<Record<UserRole, AssetCustodian>> = {

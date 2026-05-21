@@ -31,10 +31,13 @@ import {
 import { Session, UserSession } from '@thallesp/nestjs-better-auth';
 import { memoryStorage } from 'multer';
 
-import { AssetsService }   from '../services/assets.service';
-import { CreateAssetDto }  from '../dto/create-asset.dto';
-import { UpdateAssetDto, QueryAssetDto, SetAssetStatusDto, ProcessCheckoutDto } from '../dto/assets.dto';
-import { RolesGuard }      from '../../auth/guards/roles.guard';
+import { AssetsService }      from '../services/assets.service';
+import { CreateAssetDto }    from '../dto/create-asset.dto';
+import { UpdateAssetDto }    from '../dto/update-asset.dto';
+import { QueryAssetDto }     from '../dto/query-asset.dto';
+import { SetAssetStatusDto } from '../dto/set-asset-status.dto';
+import { ProcessCheckoutDto } from '../dto/process-checkout.dto';
+import { RolesGuard }        from '../../auth/guards/roles.guard';
 
 @ApiTags('Assets')
 @ApiBearerAuth()

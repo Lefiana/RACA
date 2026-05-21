@@ -1,0 +1,32 @@
+# File: docker-compose.prod.yml (root of monorepo)
+# Purpose: Production overrides — extends docker-compose.yml.
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --env-file .env.production up --build -d
+#
+# What changes in production:
+#   - Uses "prod" build target (compiled TypeScript, no source mounts)
+#   - No source volume mounts
+#   - NODE_ENV=production
+#   - Stricter restart policies
+
+services:
+
+  backend:
+    build:
+      target: prod   # compiled output, no ts-node
+    environment:
+      NODE_ENV: production
+    # Remove dev volume mounts in production
+    volumes:
+      - backend_uploads:/app/uploads
+
+  web:
+    build:
+      target: prod
+    environment:
+      NODE_ENV: production
+    volumes: []
+
+volumes:
+  backend_uploads:

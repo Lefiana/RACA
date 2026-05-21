@@ -1,0 +1,126 @@
+# File: docker-compose.yml (root of monorepo)
+# Purpose: Development orchestration.
+#          Three services: postgres, backend, web.
+#          Source is mounted as volumes so hot reload works without rebuilding.
+# Usage:
+#   docker-compose --env-file .env.docker up --build
+#   docker-compose --env-file .env.docker up --build -d   (detached)
+#   docker-compose --env-file .env.docker down
+
+services:
+
+  # ─── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: raca_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume — data persists across container restarts
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Waits until postgres is actually accepting connections before
+      # dependent services start. -U uses the POSTGRES_USER variable.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+    networks:
+      - raca_network
+
+  # ─── Database Migration + Seed ───────────────────────────────────────────────
+  # This is a one-shot service — it runs migrate + seed then exits.
+  # The backend depends_on this completing (condition: service_completed_successfully).
+  # Uses the database package directly so migrations run from the correct schema path.
+  migrate:
+    build:
+      context: .
+      dockerfile: packages/database/Dockerfile
+    container_name: raca_migrate
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - raca_network
+    # Restart policy: never restart — if migration fails we want to see the error
+    restart: "no"
+
+  # ─── NestJS Backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+      # "dev" target uses ts-node with watch — no compilation step
+      target: dev
+    container_name: raca_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL:        ${DATABASE_URL}
+      BETTER_AUTH_SECRET:  ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL:     ${BETTER_AUTH_URL}
+      FRONTEND_URL:        ${FRONTEND_URL}
+      NODE_ENV:            ${NODE_ENV}
+      PORT:                ${PORT}
+      UPLOAD_DEST:         ${UPLOAD_DEST}
+    ports:
+      - "${PORT}:${PORT}"
+    volumes:
+      # Mount source for hot reload — changes reflect immediately
+      - ./apps/backend/src:/app/apps/backend/src
+      - ./packages:/app/packages
+      # Exclude node_modules from host mount — use the container's installed version
+      - /app/node_modules
+      - /app/apps/backend/node_modules
+      # Persist uploaded files across restarts
+      - backend_uploads:/app/apps/backend/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - raca_network
+
+  # ─── Next.js Frontend ────────────────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: dev
+    container_name: raca_web
+    restart: unless-stopped
+    environment:
+      NODE_ENV:             development
+      NEXT_PUBLIC_API_URL:  http://localhost:${PORT}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount source for hot reload
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/public:/app/apps/web/public
+      - /app/node_modules
+      - /app/apps/web/node_modules
+      # Next.js cache — persist for faster rebuilds
+      - web_next_cache:/app/apps/web/.next
+    depends_on:
+      - backend
+    networks:
+      - raca_network
+
+# ─── Named Volumes ─────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  backend_uploads:
+  web_next_cache:
+
+# ─── Network ───────────────────────────────────────────────────────────────────
+networks:
+  raca_network:
+    driver: bridge
