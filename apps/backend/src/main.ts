@@ -8,6 +8,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -30,7 +31,7 @@ async function bootstrap() {
 
   // CORS — credentials: true is required for Better Auth's cookie-based sessions
   app.enableCors({
-    origin:      process.env.FRONTEND_URL ?? 'http://localhost:6000',
+    origin:      process.env.FRONTEND_URL ?? 'http://localhost:3000',
     credentials: true,
     methods:     ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
@@ -56,7 +57,11 @@ async function bootstrap() {
 
   SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
 
-  const port = process.env.PORT ?? 6001;
+  // Attach Socket.IO adapter — required for WebSocket gateway to work
+  // Must be called before app.listen()
+  app.useWebSocketAdapter(new IoAdapter(app));
+
+  const port = process.env.PORT ?? 3001;
   await app.listen(port);
 
   console.log(`\n🚀 RACA API        → http://localhost:${port}/api/v1`);

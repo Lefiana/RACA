@@ -98,12 +98,15 @@ enum CheckoutStatus {
 
 enum NotificationType {
   REQUEST_SUBMITTED
-  APPROVAL_REQUIRED
   REQUEST_APPROVED
   REQUEST_REJECTED
+  STAGE_ADVANCED
+  STEP_APPROVED
+  STEP_REJECTED
+  ASSET_CHECKED_OUT
+  ASSET_RETURNED
   ASSET_DUE
   ASSET_OVERDUE
-  CONFLICT_DETECTED
   SYSTEM
 }
 
@@ -494,9 +497,11 @@ model Notification {
   id        String           @id @default(cuid())
   userId    String
   requestId String?
+  stepId    String?          // ADDED: links to a specific approval step when relevant
   type      NotificationType
   title     String
   body      String
+  metadata  Json             @default("{}") // ADDED: extra context (stage, reason, etc.)
   isRead    Boolean          @default(false)
   readAt    DateTime?
   createdAt DateTime         @default(now())

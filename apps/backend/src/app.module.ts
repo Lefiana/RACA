@@ -13,9 +13,10 @@ import { RequestsModule }      from './modules/requests/requests.module';
 import { ApprovalsModule }     from './modules/approvals/approvals.module';
 import { VenuesModule }        from './modules/venues/venues.module';
 import { AssetsModule }        from './modules/assets/assets.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 // Uncomment as each module is built:
-// import { NotificationsModule } from './modules/notifications/notifications.module';
+
 // import { AuditLogsModule }     from './modules/audit-logs/audit-logs.module';
 
 @Module({
@@ -32,7 +33,8 @@ import { AssetsModule }        from './modules/assets/assets.module';
     RequestsModule,
     ApprovalsModule,
     AssetsModule,
-    VenuesModule
+    VenuesModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}
