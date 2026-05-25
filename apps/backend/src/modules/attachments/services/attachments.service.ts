@@ -207,6 +207,7 @@ export class AttachmentsService {
       attachmentId: id,
       requestId:    attachment.requestId,
       stepId:       attachment.approvalStepId,
+      deletedById: userId,
     });
 
     this.logger.log(`[AttachmentsService] deleted attachment: ${id}`);
