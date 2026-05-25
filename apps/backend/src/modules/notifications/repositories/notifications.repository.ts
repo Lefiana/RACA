@@ -1,5 +1,5 @@
 // File: apps/backend/src/modules/notifications/repositories/notifications.repository.ts
-// Purpose: All Prisma queries for notification records. Service never calls prisma directly.
+// Purpose: All Prisma queries for notification records.
 // Dependencies: @repo/database, @nestjs/common
 
 import { Injectable } from '@nestjs/common';
@@ -7,8 +7,6 @@ import { prisma, NotificationType } from '@repo/database';
 
 @Injectable()
 export class NotificationsRepository {
-
-  // ── Reads ─────────────────────────────────────────────────────────────────
 
   async findMany(params: {
     userId:      string;
@@ -20,7 +18,8 @@ export class NotificationsRepository {
 
     const where = {
       userId,
-      ...(unreadOnly && { readAt: null }),
+      // CHANGED: isRead is the indexed boolean field — use it, not readAt
+      ...(unreadOnly && { isRead: false }),
     };
 
     const [data, total] = await prisma.$transaction([
@@ -37,8 +36,9 @@ export class NotificationsRepository {
   }
 
   async countUnread(userId: string): Promise<number> {
+    // CHANGED: isRead: false — matches the @@index([userId, isRead]) for performance
     return prisma.notification.count({
-      where: { userId, readAt: null },
+      where: { userId, isRead: false },
     });
   }
 
@@ -46,16 +46,14 @@ export class NotificationsRepository {
     return prisma.notification.findUnique({ where: { id } });
   }
 
-  // ── Writes ────────────────────────────────────────────────────────────────
-
   async create(data: {
-    userId:      string;
-    type:        NotificationType;
-    title:       string;
-    body:        string;
-    requestId?:  string;
-    stepId?:     string;
-    metadata?:   Record<string, any>;
+    userId:     string;
+    type:       NotificationType;
+    title:      string;
+    body:       string;
+    requestId?: string;
+    stepId?:    string;
+    metadata?:  Record<string, any>;
   }) {
     return prisma.notification.create({
       data: {
@@ -71,16 +69,18 @@ export class NotificationsRepository {
   }
 
   async markOneRead(id: string) {
+    // CHANGED: set both isRead and readAt together
     return prisma.notification.update({
       where: { id },
-      data:  { readAt: new Date() },
+      data:  { isRead: true, readAt: new Date() },
     });
   }
 
   async markAllRead(userId: string) {
+    // CHANGED: set both isRead and readAt together
     return prisma.notification.updateMany({
-      where: { userId, readAt: null },
-      data:  { readAt: new Date() },
+      where: { userId, isRead: false },
+      data:  { isRead: true, readAt: new Date() },
     });
   }
 }

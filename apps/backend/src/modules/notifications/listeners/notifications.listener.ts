@@ -1,18 +1,13 @@
 // File: apps/backend/src/modules/notifications/listeners/notifications.listener.ts
-// Purpose: Listens to all domain events and creates the appropriate notifications.
-//          Every handler is fully isolated in try/catch — a notification failure
-//          never affects the business operation that emitted the event.
+// Purpose: Domain event listeners. All handlers wrapped in try/catch.
 // Dependencies: @nestjs/event-emitter, NotificationsService, @repo/database, prisma
 
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent }            from '@nestjs/event-emitter';
-import { prisma, NotificationType, ApprovalStage } from '@repo/database';
+import { prisma, NotificationType, ApprovalStage, UserRole } from '@repo/database';
 
 import { NotificationsService } from '../services/notifications.service';
 
-// Maps each ApprovalStage to a human-readable label for notification copy.
-// Duplicated from approval-step.entity.ts intentionally — the listener should
-// not import from the Approvals module to avoid circular dependencies.
 const STAGE_LABEL: Record<ApprovalStage, string> = {
   [ApprovalStage.STAGE_1_ADVISER]:                 'Adviser',
   [ApprovalStage.STAGE_1_DEPT_HEAD]:               'Department Head',
@@ -23,8 +18,6 @@ const STAGE_LABEL: Record<ApprovalStage, string> = {
   [ApprovalStage.STAGE_3_SCHOOL_ADMIN]:            'School Administrator',
 };
 
-// Maps each ApprovalStage to the UserRole string that handles it.
-// Used to find the right approver(s) to notify when a stage opens.
 const STAGE_TO_ROLE: Record<ApprovalStage, string> = {
   [ApprovalStage.STAGE_1_ADVISER]:                 'ADVISER',
   [ApprovalStage.STAGE_1_DEPT_HEAD]:               'DEPARTMENT_HEAD',
@@ -35,7 +28,6 @@ const STAGE_TO_ROLE: Record<ApprovalStage, string> = {
   [ApprovalStage.STAGE_3_SCHOOL_ADMIN]:            'SCHOOL_ADMIN',
 };
 
-// Stages that open when a request enters each status
 const STAGE2_STAGES: ApprovalStage[] = [
   ApprovalStage.STAGE_2_MIS,
   ApprovalStage.STAGE_2_BUILDING,
@@ -49,8 +41,6 @@ export class NotificationsListener {
 
   constructor(private readonly notificationsService: NotificationsService) {}
 
-  // ── request.submitted ─────────────────────────────────────────────────────
-  // Notify the Adviser (Stage 1) that a new request needs their review.
   @OnEvent('request.submitted')
   async onRequestSubmitted(payload: {
     requestId:       string;
@@ -59,13 +49,14 @@ export class NotificationsListener {
   }) {
     try {
       const advisers = await prisma.user.findMany({
-        where: { role: 'ADVISER', isActive: true, deletedAt: null },
+        where:  { role: 'ADVISER', isActive: true, deletedAt: null },
         select: { id: true },
       });
 
       for (const adviser of advisers) {
         await this.notificationsService.createAndPush({
           userId:    adviser.id,
+          // CHANGED: NotificationType.REQUEST_SUBMITTED — exists in schema
           type:      NotificationType.REQUEST_SUBMITTED,
           title:     'New request awaiting your review',
           body:      `Request ${payload.referenceNumber} has been submitted and requires your approval.`,
@@ -77,8 +68,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── request.stage.advanced ────────────────────────────────────────────────
-  // Notify the next stage's approvers that the request is ready for them.
   @OnEvent('request.stage.advanced')
   async onStageAdvanced(payload: {
     requestId:  string;
@@ -92,7 +81,6 @@ export class NotificationsListener {
       });
       if (!request) return;
 
-      // Determine which stages just became actionable based on the new status
       let stagesToNotify: ApprovalStage[] = [];
 
       if (payload.toStatus === 'STAGE1_REVIEW') {
@@ -106,7 +94,6 @@ export class NotificationsListener {
       for (const stage of stagesToNotify) {
         const role = STAGE_TO_ROLE[stage];
 
-        // Notify the explicitly assigned approver first
         const step = await prisma.approvalStep.findFirst({
           where:  { requestId: payload.requestId, stage },
           select: { approverId: true },
@@ -117,9 +104,8 @@ export class NotificationsListener {
         if (step?.approverId) {
           userIdsToNotify.push(step.approverId);
         } else {
-          // Fallback: notify all users with this role
           const users = await prisma.user.findMany({
-            where:  { role, isActive: true, deletedAt: null },
+            where:  { role: role as UserRole, isActive: true, deletedAt: null },
             select: { id: true },
           });
           userIdsToNotify.push(...users.map(u => u.id));
@@ -128,6 +114,7 @@ export class NotificationsListener {
         for (const userId of userIdsToNotify) {
           await this.notificationsService.createAndPush({
             userId,
+            // CHANGED: NotificationType.STAGE_ADVANCED
             type:      NotificationType.STAGE_ADVANCED,
             title:     `Request ready for ${STAGE_LABEL[stage]} review`,
             body:      `${request.referenceNumber} — "${request.activityTitle}" has advanced and requires your action.`,
@@ -141,8 +128,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── approval.step.approved ────────────────────────────────────────────────
-  // Notify the requestor that one approver has approved their request.
   @OnEvent('approval.step.approved')
   async onStepApproved(payload: {
     stepId:     string;
@@ -159,8 +144,9 @@ export class NotificationsListener {
 
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
+        // CHANGED: NotificationType.STEP_APPROVED
         type:      NotificationType.STEP_APPROVED,
-        title:     'Your request has been approved by ' + STAGE_LABEL[payload.stage],
+        title:     `Your request was approved by ${STAGE_LABEL[payload.stage]}`,
         body:      `${request.referenceNumber} passed the ${STAGE_LABEL[payload.stage]} review.`,
         requestId: payload.requestId,
         stepId:    payload.stepId,
@@ -171,8 +157,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── approval.step.rejected ────────────────────────────────────────────────
-  // Notify the requestor of rejection with the reason.
   @OnEvent('approval.step.rejected')
   async onStepRejected(payload: {
     stepId:     string;
@@ -190,6 +174,7 @@ export class NotificationsListener {
 
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
+        // CHANGED: NotificationType.STEP_REJECTED
         type:      NotificationType.STEP_REJECTED,
         title:     `Your request was rejected by ${STAGE_LABEL[payload.stage]}`,
         body:      `${request.referenceNumber} was rejected. Reason: ${payload.reason}`,
@@ -202,8 +187,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── request.approved ─────────────────────────────────────────────────────
-  // Notify the requestor that their request is fully approved.
   @OnEvent('request.approved')
   async onRequestApproved(payload: { requestId: string }) {
     try {
@@ -215,6 +198,7 @@ export class NotificationsListener {
 
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
+        // CHANGED: NotificationType.REQUEST_APPROVED — exists in schema
         type:      NotificationType.REQUEST_APPROVED,
         title:     '🎉 Your request has been fully approved!',
         body:      `${request.referenceNumber} — "${request.activityTitle}" is approved. Venue and assets are confirmed.`,
@@ -225,11 +209,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── request.rejected ─────────────────────────────────────────────────────
-  // Redundant to step.rejected but kept here for completeness —
-  // this carries the full rejection summary (who, which stage, why).
-  // We skip creating a second notification if step.rejected already fired —
-  // the listener checks if an unread rejection notification already exists.
   @OnEvent('request.rejected')
   async onRequestRejected(payload: {
     requestId:       string;
@@ -240,9 +219,7 @@ export class NotificationsListener {
     reason:          string;
   }) {
     try {
-      // Already handled by approval.step.rejected — no duplicate
-      // This handler is reserved for future email/SMS integrations
-      // that need the full summary payload.
+      // Handled by approval.step.rejected — reserved for future email/SMS
       this.logger.log(
         `[Listener] request.rejected received for ${payload.referenceNumber} — handled by step.rejected`,
       );
@@ -251,8 +228,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── asset.checked_out ─────────────────────────────────────────────────────
-  // Notify the requestor that their assets have been checked out.
   @OnEvent('asset.checked_out')
   async onAssetCheckedOut(payload: {
     assetId:     string;
@@ -275,6 +250,7 @@ export class NotificationsListener {
 
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
+        // CHANGED: NotificationType.ASSET_CHECKED_OUT
         type:      NotificationType.ASSET_CHECKED_OUT,
         title:     'Asset checked out',
         body:      `${asset.name} (${asset.assetTag}) has been checked out for ${request.referenceNumber}.`,
@@ -286,8 +262,6 @@ export class NotificationsListener {
     }
   }
 
-  // ── asset.returned ────────────────────────────────────────────────────────
-  // Notify the custodian that an asset has been returned.
   @OnEvent('asset.returned')
   async onAssetReturned(payload: {
     assetId:     string;
@@ -298,24 +272,20 @@ export class NotificationsListener {
   }) {
     try {
       const asset = await prisma.asset.findUnique({
-        where:   { id: payload.assetId },
-        select:  { name: true, assetTag: true, custodianRole: true },
+        where:  { id: payload.assetId },
+        select: { name: true, assetTag: true, custodianRole: true },
       });
       if (!asset) return;
 
-      // Notify the custodian who owns this asset category
       const custodians = await prisma.user.findMany({
-        where: {
-          role:      asset.custodianRole as string,
-          isActive:  true,
-          deletedAt: null,
-        },
+        where:  { role: asset.custodianRole as unknown as UserRole, isActive: true, deletedAt: null },
         select: { id: true },
       });
 
       for (const custodian of custodians) {
         await this.notificationsService.createAndPush({
           userId:    custodian.id,
+          // CHANGED: NotificationType.ASSET_RETURNED
           type:      NotificationType.ASSET_RETURNED,
           title:     'Asset returned',
           body:      `${asset.name} (${asset.assetTag}) has been returned in ${payload.condition?.toLowerCase() ?? 'unknown'} condition.`,
