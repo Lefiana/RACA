@@ -15,6 +15,7 @@ import { VenuesModule }        from './modules/venues/venues.module';
 import { AssetsModule }        from './modules/assets/assets.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AuditLogsModule }     from './modules/audit-logs/audit-logs.module';
+import { SystemConfigModule } from './modules/system-config/system-config.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { AuditLogsModule }     from './modules/audit-logs/audit-logs.module';
     VenuesModule,
     NotificationsModule,
     AuditLogsModule,
+    SystemConfigModule,
   ],
 })
 export class AppModule {}
