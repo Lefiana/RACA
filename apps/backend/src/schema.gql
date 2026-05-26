@@ -1,0 +1,85 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type AssetEvent {
+  activityTitle: String!
+  assetId: String!
+  assetName: String!
+  assetTag: String!
+  category: String!
+  checkedOutAt: String
+  dueAt: String
+  id: String!
+  quantity: Int!
+  referenceNumber: String!
+  requestId: String!
+  returnedAt: String
+  status: String!
+}
+
+type CalendarDay {
+  assetEventCount: Int!
+  assetEvents: [AssetEvent!]!
+  date: String!
+  maintenanceCount: Int!
+  maintenanceEvents: [MaintenanceEvent!]!
+  venueEventCount: Int!
+  venueEvents: [VenueEvent!]!
+}
+
+type MaintenanceEvent {
+  description: String
+  endAt: String
+  entityId: String!
+  entityName: String!
+  entityType: String!
+  id: String!
+  resolvedAt: String
+  startAt: String!
+  title: String!
+}
+
+type Query {
+  """All asset checkouts in a date range"""
+  assetSchedule(filter: ScheduleFilterInput!): [AssetEvent!]!
+
+  """Sparse day-by-day calendar summary"""
+  calendarSummary(filter: ScheduleFilterInput!): [CalendarDay!]!
+
+  """All maintenance windows in a date range"""
+  maintenanceSchedule(filter: ScheduleFilterInput!): [MaintenanceEvent!]!
+
+  """All locked/confirmed venue bookings in a date range"""
+  venueSchedule(filter: ScheduleFilterInput!): [VenueEvent!]!
+}
+
+input ScheduleFilterInput {
+  assetId: String
+  from: String!
+  requestId: String
+  to: String!
+  venueId: String
+}
+
+type VenueEvent {
+  activityTitle: String!
+  bufferEndAt: String!
+  bufferStartAt: String!
+  confirmedAt: String
+  endAt: String!
+  id: String!
+  isLocked: Boolean!
+  referenceNumber: String!
+  requestId: String!
+  requestStatus: String!
+  requestedBy: VenueEventRequestedBy
+  startAt: String!
+  venueId: String!
+  venueName: String!
+}
+
+type VenueEventRequestedBy {
+  department: String
+  name: String!
+}

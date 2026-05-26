@@ -31,7 +31,7 @@ async function bootstrap() {
 
   // CORS — credentials: true is required for Better Auth's cookie-based sessions
   app.enableCors({
-    origin:      process.env.FRONTEND_URL ?? 'http://localhost:3000',
+    origin:      process.env.FRONTEND_URL ?? 'http://localhost:60000',
     credentials: true,
     methods:     ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
@@ -61,7 +61,7 @@ async function bootstrap() {
   // Must be called before app.listen()
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  const port = process.env.PORT ?? 3001;
+  const port = process.env.PORT ?? 60000;
   await app.listen(port);
 
   console.log(`\n🚀 RACA API        → http://localhost:${port}/api/v1`);

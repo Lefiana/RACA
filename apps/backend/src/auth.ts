@@ -83,7 +83,7 @@ export const auth = betterAuth({
 
   // ── Trusted origins ───────────────────────────────────────────────────────
   trustedOrigins: [
-    process.env.FRONTEND_URL ?? 'http://localhost:6000',
+    process.env.FRONTEND_URL ?? 'http://localhost:60000',
   ],
 
   // ── Advanced ─────────────────────────────────────────────────────────────
