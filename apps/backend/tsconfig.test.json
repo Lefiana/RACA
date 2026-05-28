@@ -1,0 +1,17 @@
+// File: apps/backend/tsconfig.test.json
+// Purpose: TypeScript config for E2E tests — extends base config and adds jest types.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["jest", "node"],
+    "esModuleInterop": true,
+    "strictNullChecks": false,
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "auth.ts"
+  ]
+}
