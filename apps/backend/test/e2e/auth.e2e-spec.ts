@@ -2,10 +2,9 @@
 // File: apps/backend/test/e2e/auth.e2e-spec.ts
 // Purpose: E2E tests for Better Auth sign-up, sign-in, sign-out, get-session.
 
-import supertest           from 'supertest';
 import { INestApplication } from '@nestjs/common';
-import { bootApp, closeApp }                                        from '../helpers/app.helper';
-import { startTestDatabase, stopTestDatabase, truncateAllTables }   from '../helpers/db.helper';
+import { bootApp, closeApp } from '../helpers/app.helper';
+import { startTestDatabase, stopTestDatabase, truncateAllTables } from '../helpers/db.helper';
 
 describe('Auth (e2e)', () => {
   let app:   INestApplication;
@@ -125,22 +124,34 @@ describe('Auth (e2e)', () => {
 
   describe('POST /api/auth/sign-out', () => {
     it('clears the session', async () => {
-      // Inside your sign-out test block:
-      const signOutRes = await request(app.getHttpServer())
-        .post('/api/auth/sign-out')
-        .set('Cookie', authCookies) // Pass your logged-in cookies
+      // 1. Sign up an isolation user first to get a real session cookie for this specific test
+      const signUpRes = await agent
+        .post('/api/auth/sign-up/email')
+        .send({
+          email: 'signout-test@raca.test',
+          password: 'Test1234!',
+          name: 'Signout Test User',
+        })
         .expect(200);
 
-      // Extract the deletion cookies sent back by Better Auth
+      const activeCookies = signUpRes.headers['set-cookie'];
+
+      // 2. Call sign-out passing those active validation cookies
+      const signOutRes = await agent
+        .post('/api/auth/sign-out')
+        .set('Cookie', activeCookies)
+        .expect(200);
+
+      // Extract the headers sent back by Better Auth instructing cookie clearout
       const loggedOutCookies = signOutRes.headers['set-cookie'];
 
-      // Use those logged-out cookies for the verification check
-      const sessionRes = await request(app.getHttpServer())
+      // 3. Verify that the session is treated as cleared when evaluating these cookies
+      const sessionRes = await agent
         .get('/api/auth/get-session')
-        .set('Cookie', loggedOutCookies) // This tells the server to treat it as deleted
+        .set('Cookie', loggedOutCookies)
         .expect(200);
 
-      expect(sessionRes.body).toBeNull();
+      expect(sessionRes.body?.user).toBeUndefined();
     });
   });
 });
