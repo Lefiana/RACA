@@ -6,6 +6,7 @@
 // Dependencies: @nestjs/common, @nestjs/platform-express, @thallesp/nestjs-better-auth
 
 import {
+  Body,
   Controller,
   Delete,
   Get,
@@ -68,7 +69,7 @@ export class AttachmentsController {
     @Session()              session:   UserSession,
     @Param('requestId')     requestId: string,
     @UploadedFile()         file:      Express.Multer.File,
-    @Query()                dto:       UploadAttachmentDto,
+    @Body()                dto:       UploadAttachmentDto,
   ) {
     if (!file) throw new Error('No file provided');
 
@@ -100,7 +101,7 @@ export class AttachmentsController {
     @Session()          session: UserSession,
     @Param('stepId')    stepId:  string,
     @UploadedFile()     file:    Express.Multer.File,
-    @Query()            dto:     UploadAttachmentDto,
+    @Body()            dto:     UploadAttachmentDto,
   ) {
     if (!file) throw new Error('No file provided');
 
