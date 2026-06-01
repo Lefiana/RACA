@@ -22,7 +22,6 @@ import { UserRole } from '@repo/database';
 import { ApprovalsService }                        from '../services/approvals.service';
 import { DecideApprovalDto }                        from '../dto/decide-approval.dto';
 import { QueryApprovalsDto }                        from '../dto/query-approvals.dto';
-import { RolesGuard }                   from '../../auth/guards/roles.guard';
 import { Roles }                        from '../../auth/decorators';
 
 // All approver roles — any of these can reach the pending queue
@@ -40,7 +39,6 @@ const APPROVER_ROLES = [
 @ApiTags('Approvals')
 @ApiBearerAuth()
 @Controller('approvals')
-@UseGuards(RolesGuard)
 export class ApprovalsController {
   constructor(private readonly approvalsService: ApprovalsService) {}
 

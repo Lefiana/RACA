@@ -37,12 +37,10 @@ import { UpdateAssetDto }    from '../dto/update-asset.dto';
 import { QueryAssetDto }     from '../dto/query-asset.dto';
 import { SetAssetStatusDto } from '../dto/set-asset-status.dto';
 import { ProcessCheckoutDto } from '../dto/process-checkout.dto';
-import { RolesGuard }        from '../../auth/guards/roles.guard';
 
 @ApiTags('Assets')
 @ApiBearerAuth()
 @Controller('assets')
-@UseGuards(RolesGuard)
 export class AssetsController {
   constructor(private readonly assetsService: AssetsService) {}
 

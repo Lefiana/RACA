@@ -17,12 +17,10 @@ import { Session, UserSession } from '@thallesp/nestjs-better-auth';
 
 import { NotificationsService }  from '../services/notifications.service';
 import { QueryNotificationsDto } from '../dto/query-notifications.dto';
-import { RolesGuard }            from '../../auth/guards/roles.guard';
 
 @ApiTags('Notifications')
 @ApiBearerAuth()
 @Controller('notifications')
-@UseGuards(RolesGuard)
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 

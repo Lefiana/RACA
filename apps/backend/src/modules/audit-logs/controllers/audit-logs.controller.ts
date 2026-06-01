@@ -16,13 +16,11 @@ import { UserRole } from '@repo/database';
 
 import { AuditLogsService }  from '../services/audit-logs.service';
 import { QueryAuditLogsDto } from '../dto/query-audit-logs.dto';
-import { RolesGuard }        from '../../auth/guards/roles.guard';
 import { Roles }             from '../../auth/decorators';
 
 @ApiTags('Audit Logs')
 @ApiBearerAuth()
 @Controller('audit-logs')
-@UseGuards(RolesGuard)
 @Roles(UserRole.SCHOOL_ADMIN, UserRole.SUPER_ADMIN)
 export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}

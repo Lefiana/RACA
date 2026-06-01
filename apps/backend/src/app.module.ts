@@ -1,7 +1,8 @@
 // File: apps/backend/src/app.module.ts
-// CHANGED: add GraphQLModule and SchedulesModule
+// CHANGED: RolesGuard registered here so it runs AFTER BetterAuthModule's AuthGuard
 
 import { Module }          from '@nestjs/common';
+import { APP_GUARD }       from '@nestjs/core';
 import { ConfigModule }    from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { GraphQLModule }   from '@nestjs/graphql';
@@ -18,17 +19,13 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { AuditLogsModule }    from './modules/audit-logs/audit-logs.module';
 import { SystemConfigModule } from './modules/system-config/system-config.module';
 import { SchedulesModule }    from './modules/schedules/schedules.module';
+import { RolesGuard }         from './modules/auth/guards/roles.guard';
 
 @Module({
   imports: [
-    // ConfigModule — makes process.env available via ConfigService everywhere
     ConfigModule.forRoot({ isGlobal: true }),
-    // EventEmitterModule — internal domain events (request.submitted, step.approved, etc.) // wildcard: true allows patterns like 'request.*' in listeners
     EventEmitterModule.forRoot({ wildcard: true }),
 
-    // GraphQL — code-first, auto-generates schema from decorators.
-    // playground available at /graphql in development.
-    // context passes the raw Express request so GqlAuthGuard can read cookies.
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver:         ApolloDriver,
       autoSchemaFile: join(process.cwd(), 'src/schema.gql'),
@@ -37,6 +34,8 @@ import { SchedulesModule }    from './modules/schedules/schedules.module';
       context: ({ req }) => ({ req }),
     }),
 
+    // CHANGED: AuthModule first — BetterAuthModule.forRoot() inside it
+    // registers the AuthGuard as APP_GUARD
     AuthModule,
     RequestsModule,
     ApprovalsModule,
@@ -47,6 +46,16 @@ import { SchedulesModule }    from './modules/schedules/schedules.module';
     AuditLogsModule,
     SystemConfigModule,
     SchedulesModule,
+  ],
+  providers: [
+    // CHANGED: RolesGuard registered LAST — after AuthModule has already
+    // registered BetterAuthModule's AuthGuard, guaranteeing execution order:
+    // 1. Better Auth AuthGuard → populates request.user
+    // 2. RolesGuard → reads request.user and checks roles
+    {
+      provide:  APP_GUARD,
+      useClass: RolesGuard,
+    },
   ],
 })
 export class AppModule {}

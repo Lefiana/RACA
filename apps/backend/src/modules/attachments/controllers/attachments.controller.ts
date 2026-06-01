@@ -34,8 +34,6 @@ import { memoryStorage } from 'multer';
 import { AttachmentsService }    from '../services/attachments.service';
 import { UploadAttachmentDto }   from '../dto/upload-attachment.dto';
 import { QueryAttachmentDto }    from '../dto/query-attachment.dto';
-import { RolesGuard }            from '../../auth/guards/roles.guard';
-
 // Multer config — memoryStorage keeps the file in buffer until
 // StorageService writes it to disk in the correct directory structure.
 // Size limit is a hard cap at the HTTP layer — service also checks against SystemConfig.
@@ -47,7 +45,6 @@ const multerOptions = {
 @ApiTags('Attachments')
 @ApiBearerAuth()
 @Controller('attachments')
-@UseGuards(RolesGuard)
 export class AttachmentsController {
   constructor(private readonly attachmentsService: AttachmentsService) {}
 

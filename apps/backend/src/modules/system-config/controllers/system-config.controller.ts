@@ -24,13 +24,11 @@ import { SystemConfigService }    from '../services/system-config.service';
 import { UpsertSystemConfigDto }  from '../dto/upsert-system-config.dto';
 import { UpdateSystemConfigDto }  from '../dto/update-system-config.dto';
 import { QuerySystemConfigDto }   from '../dto/query-system-config.dto';
-import { RolesGuard }             from '../../auth/guards/roles.guard';
 import { Roles }                  from '../../auth/decorators';
 
 @ApiTags('System Config')
 @ApiBearerAuth()
 @Controller('system-config')
-@UseGuards(RolesGuard)
 export class SystemConfigController {
   constructor(private readonly systemConfigService: SystemConfigService) {}
 

@@ -28,7 +28,6 @@ import { Session, UserSession } from '@thallesp/nestjs-better-auth';
 import { RequestsService }   from '../services/requests.service';
 import { CreateRequestDto }  from '../dto/create-request.dto';
 import { UpdateRequestDto, QueryRequestDto } from '../dto/query-update.dto';
-import { RolesGuard }        from '../../auth/guards/roles.guard';
 
 // UserRole is read from session.user — the Better Auth additionalFields
 // make role available on the session user object directly.
@@ -36,7 +35,6 @@ import { RolesGuard }        from '../../auth/guards/roles.guard';
 @ApiTags('Requests')
 @ApiBearerAuth()
 @Controller('requests')
-@UseGuards(RolesGuard)
 export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 

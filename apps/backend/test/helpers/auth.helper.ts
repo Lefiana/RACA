@@ -1,8 +1,9 @@
 // File: apps/backend/test/helpers/auth.helper.ts
-// CHANGED: agent typed as any throughout
+// CHANGED: after updating the role in DB, sign out and sign back in
+// to get a fresh session cookie that reflects the new role
 
-import supertest from 'supertest';
-import { prisma } from '@repo/database';
+import supertest    from 'supertest';
+import { prisma }  from '@repo/database';
 
 export type TestRole =
   | 'REQUESTOR'
@@ -17,17 +18,18 @@ export type TestRole =
   | 'SUPER_ADMIN';
 
 export interface ITestUser {
-  id:     string;
-  email:  string;
-  name:   string;
-  role:   TestRole;
-  cookie: string;
+  id:       string;
+  email:    string;
+  name:     string;
+  role:     TestRole;
+  cookie:   string;
+  password: string;
 }
 
 let userCounter = 0;
 
 export async function createTestUser(
-  agent:      any,   // CHANGED
+  agent:      any,
   role:       TestRole,
   overrides?: { name?: string; email?: string },
 ): Promise<ITestUser> {
@@ -37,27 +39,43 @@ export async function createTestUser(
   const name     = overrides?.name  ?? `Test ${role}`;
   const password = 'Test1234!';
 
+  // Step 1 — sign up (creates user with REQUESTOR role)
   const signUpRes = await agent
     .post('/api/auth/sign-up/email')
     .send({ email, password, name })
     .expect(200);
 
-  const rawCookie = signUpRes.headers['set-cookie'] as string | string[];
-  const cookie    = Array.isArray(rawCookie) ? rawCookie.join('; ') : rawCookie;
-
   const userId = signUpRes.body.user?.id;
-  if (!userId) throw new Error(`Sign-up failed for ${email}: ${JSON.stringify(signUpRes.body)}`);
+  if (!userId) {
+    throw new Error(`Sign-up failed for ${email}: ${JSON.stringify(signUpRes.body)}`);
+  }
 
+  // Step 2 — update role directly in DB
   await prisma.user.update({
     where: { id: userId },
     data:  { role },
   });
 
-  return { id: userId, email, name, role, cookie };
+  // Step 3 — sign out the current session (cookie has REQUESTOR role)
+  const signUpCookie = signUpRes.headers['set-cookie'] as string | string[];
+  await agent
+    .post('/api/auth/sign-out')
+    .set('Cookie', Array.isArray(signUpCookie) ? signUpCookie.join('; ') : signUpCookie);
+
+  // Step 4 — sign back in to get a fresh session with the updated role
+  const signInRes = await agent
+    .post('/api/auth/sign-in/email')
+    .send({ email, password })
+    .expect(200);
+
+  const rawCookie = signInRes.headers['set-cookie'] as string | string[];
+  const cookie    = Array.isArray(rawCookie) ? rawCookie.join('; ') : rawCookie;
+
+  return { id: userId, email, name, role, cookie, password };
 }
 
 export async function signInAs(
-  agent:    any,   // CHANGED
+  agent:    any,
   email:    string,
   password: string = 'Test1234!',
 ): Promise<string> {
@@ -71,7 +89,7 @@ export async function signInAs(
 }
 
 export async function createRoleSet(
-  agent: any,   // CHANGED
+  agent: any,
 ): Promise<Record<TestRole, ITestUser>> {
   const roles: TestRole[] = [
     'REQUESTOR', 'ADVISER', 'DEPARTMENT_HEAD',

@@ -25,12 +25,10 @@ import { CreateVenueDto }     from '../dto/create-venue.dto';
 import { UpdateVenueDto }     from '../dto/update-venue.dto';
 import { QueryVenueDto }      from '../dto/query-venue.dto';
 import { SetVenueStatusDto }  from '../dto/set-venue-status.dto';
-import { RolesGuard }         from '../../auth/guards/roles.guard';
 
 @ApiTags('Venues')
 @ApiBearerAuth()
 @Controller('venues')
-@UseGuards(RolesGuard)
 export class VenuesController {
   constructor(private readonly venuesService: VenuesService) {}
 
