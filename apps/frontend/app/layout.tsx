@@ -4,18 +4,13 @@
 // Dependencies: QueryProvider, next/font
 
 import type { Metadata } from 'next';
-import localFont         from 'next/font/local';
 import { QueryProvider } from './lib/query-client';
+import { EB_Garamond } from "next/font/google";
 import './globals.css';
 
-const geistSans = localFont({
-  src:      './fonts/GeistVF.woff',
-  variable: '--font-geist-sans',
-});
-
-const geistMono = localFont({
-  src:      './fonts/GeistMonoVF.woff',
-  variable: '--font-geist-mono',
+const ebGaramond = EB_Garamond({
+  subsets: ["latin"],
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
@@ -28,7 +23,7 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={ebGaramond.variable}>
         <QueryProvider>
           {children}
         </QueryProvider>
