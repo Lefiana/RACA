@@ -21,8 +21,9 @@ export function useSession() {
   return useQuery({
     queryKey: authKeys.session,
     queryFn:  getSession,
-    staleTime: 30 * 1000, // 30 seconds
-    retry:     false,      // don't retry on 401 — no session is a valid state
+    staleTime: 60 * 1000,   // CHANGED: 60s — was 30s
+    retry:     2,            // CHANGED: retry twice on null — was false
+    retryDelay: 500,         // CHANGED: wait 500ms between retries
   });
 }
 
@@ -34,8 +35,10 @@ export function useSignIn() {
 
   return useMutation({
     mutationFn: (dto: ISignInDto) => signIn(dto),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: authKeys.session });
+    onSuccess: async () => {
+      // CHANGED: refetch immediately instead of just invalidating
+      // ensures session is populated before redirect
+      await queryClient.refetchQueries({ queryKey: authKeys.session });
       router.push('/dashboard');
     },
   });

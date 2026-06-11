@@ -1,9 +1,5 @@
 // File: apps/backend/src/modules/attachments/services/attachments.service.ts
-// Purpose: Business logic for attachment uploads, downloads, and deletions.
-//          Validates MIME types and file size against SystemConfig.
-//          Enforces who can upload/delete based on request ownership and step assignment.
-// Dependencies: AttachmentsRepository, StorageService, EventEmitter2, @repo/database
-
+// CHANGED: inject PrismaService instead of importing prisma directly
 import {
   BadRequestException,
   ForbiddenException,
@@ -13,8 +9,9 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as mimeTypes from 'mime-types';
-import { prisma, ApprovalStatus, RequestStatus } from '@repo/database';
+import { ApprovalStatus, RequestStatus } from '@repo/database';
 
+import { PrismaService }         from '../../../prisma.service';
 import { AttachmentsRepository } from '../repositories/attachments.repository';
 import { StorageService }        from './storage.service';
 import { UploadAttachmentDto }   from '../dto/upload-attachment.dto';
@@ -28,51 +25,35 @@ export class AttachmentsService {
     private readonly attachmentsRepo: AttachmentsRepository,
     private readonly storageService:  StorageService,
     private readonly eventEmitter:    EventEmitter2,
+    private readonly prisma:          PrismaService, // CHANGED
   ) {}
 
-  // ── Upload to a Request ───────────────────────────────────────────────────
-
-  async uploadToRequest(
-    requestId:  string,
-    userId:     string,
-    file:       Express.Multer.File,
-    dto:        UploadAttachmentDto,
-  ) {
-    // Verify request exists and is not in a terminal state
-    const request = await prisma.request.findFirst({
-      where: { id: requestId, deletedAt: null },
-      include: {
-        approvalSteps: { select: { approverId: true } },
-      },
+  async uploadToRequest(requestId: string, userId: string, file: Express.Multer.File, dto: UploadAttachmentDto) {
+    const request = await this.prisma.request.findFirst({
+      where:   { id: requestId, deletedAt: null },
+      include: { approvalSteps: { select: { approverId: true } } },
     });
 
     if (!request) throw new NotFoundException('Request not found');
 
-    const terminalStatuses: RequestStatus[] = [
-      RequestStatus.CANCELLED,
-      RequestStatus.COMPLETED,
-    ];
+    const terminalStatuses: RequestStatus[] = [RequestStatus.CANCELLED, RequestStatus.COMPLETED];
     if (terminalStatuses.includes(request.status)) {
-      throw new BadRequestException(
-        `Cannot upload to a ${request.status.toLowerCase()} request`,
-      );
+      throw new BadRequestException(`Cannot upload to a ${request.status.toLowerCase()} request`);
     }
 
-    // Access check: must be the requestor or an active approver on this request
-    const isRequestor  = request.requestedById === userId;
-    const isApprover   = request.approvalSteps.some(s => s.approverId === userId);
+    const isRequestor = request.requestedById === userId;
+    const isApprover  = request.approvalSteps.some(s => s.approverId === userId);
     if (!isRequestor && !isApprover) {
       throw new ForbiddenException('You do not have access to this request');
     }
 
     await this.validateFile(file);
 
-    const { storedName, storagePath, absolutePath } =
-      this.storageService.buildStoragePath({
-        context:      'requests',
-        contextId:    requestId,
-        originalName: file.originalname,
-      });
+    const { storedName, storagePath, absolutePath } = this.storageService.buildStoragePath({
+      context:      'requests',
+      contextId:    requestId,
+      originalName: file.originalname,
+    });
 
     await this.storageService.save(absolutePath, file.buffer);
 
@@ -87,51 +68,31 @@ export class AttachmentsService {
       label:     dto.label,
     });
 
-    this.eventEmitter.emit('attachment.uploaded', {
-      attachmentId: attachment.id,
-      requestId,
-      uploadedById: userId,
-    });
-
+    this.eventEmitter.emit('attachment.uploaded', { attachmentId: attachment.id, requestId, uploadedById: userId });
     this.logger.log(`[AttachmentsService] uploaded to request ${requestId}: ${file.originalname}`);
     return attachment;
   }
 
-  // ── Upload to an Approval Step ────────────────────────────────────────────
-
-  async uploadToStep(
-    stepId:  string,
-    userId:  string,
-    file:    Express.Multer.File,
-    dto:     UploadAttachmentDto,
-  ) {
-    const step = await prisma.approvalStep.findUnique({
-      where: { id: stepId },
-    });
+  async uploadToStep(stepId: string, userId: string, file: Express.Multer.File, dto: UploadAttachmentDto) {
+    const step = await this.prisma.approvalStep.findUnique({ where: { id: stepId } });
 
     if (!step) throw new NotFoundException('Approval step not found');
 
-    // Only the assigned approver can upload to a step
-    // Role-based fallback is not applied here — step attachments require explicit assignment
     if (step.approverId !== userId) {
       throw new ForbiddenException('Only the assigned approver can upload to this step');
     }
 
-    // Step must still be pending — no uploads after decision
     if (step.status !== ApprovalStatus.PENDING) {
-      throw new BadRequestException(
-        `Cannot upload to a step that has already been ${step.status.toLowerCase()}`,
-      );
+      throw new BadRequestException(`Cannot upload to a step that has already been ${step.status.toLowerCase()}`);
     }
 
     await this.validateFile(file);
 
-    const { storedName, storagePath, absolutePath } =
-      this.storageService.buildStoragePath({
-        context:      'steps',
-        contextId:    stepId,
-        originalName: file.originalname,
-      });
+    const { storedName, storagePath, absolutePath } = this.storageService.buildStoragePath({
+      context:      'steps',
+      contextId:    stepId,
+      originalName: file.originalname,
+    });
 
     await this.storageService.save(absolutePath, file.buffer);
 
@@ -146,109 +107,68 @@ export class AttachmentsService {
       label:     dto.label,
     });
 
-    this.eventEmitter.emit('attachment.uploaded', {
-      attachmentId: attachment.id,
-      stepId,
-      uploadedById: userId,
-    });
-
+    this.eventEmitter.emit('attachment.uploaded', { attachmentId: attachment.id, stepId, uploadedById: userId });
     this.logger.log(`[AttachmentsService] uploaded to step ${stepId}: ${file.originalname}`);
     return attachment;
   }
 
-  // ── List attachments for a request ───────────────────────────────────────
-
   async findByRequest(requestId: string, query: QueryAttachmentDto) {
-    const request = await prisma.request.findFirst({
-      where: { id: requestId, deletedAt: null },
-    });
+    const request = await this.prisma.request.findFirst({ where: { id: requestId, deletedAt: null } });
     if (!request) throw new NotFoundException('Request not found');
-
     return this.attachmentsRepo.findByRequestId(requestId, query.label);
   }
-
-  // ── Download ──────────────────────────────────────────────────────────────
 
   async getFileForDownload(id: string, userId: string) {
     const attachment = await this.attachmentsRepo.findById(id);
     if (!attachment) throw new NotFoundException('Attachment not found');
 
-    // Verify file actually exists on disk
     const exists = await this.storageService.exists(attachment.storagePath);
     if (!exists) throw new NotFoundException('File not found on storage');
 
-    const absolutePath = this.storageService.resolveAbsolutePath(attachment.storagePath);
-
     return {
-      absolutePath,
+      absolutePath: this.storageService.resolveAbsolutePath(attachment.storagePath),
       originalName: attachment.originalName,
       mimeType:     attachment.mimeType,
     };
   }
 
-  // ── Delete ────────────────────────────────────────────────────────────────
-
   async delete(id: string, userId: string, userRole: string) {
     const attachment = await this.attachmentsRepo.findById(id);
     if (!attachment) throw new NotFoundException('Attachment not found');
 
-    // Only the uploader or SUPER_ADMIN can delete
     if (attachment.uploadedById !== userId && userRole !== 'SUPER_ADMIN') {
       throw new ForbiddenException('You can only delete your own attachments');
     }
 
-    // Delete file from disk first — if this fails, DB record is preserved
     await this.storageService.delete(attachment.storagePath);
-
-    // Then remove the DB record
     await this.attachmentsRepo.delete(id);
 
-    this.eventEmitter.emit('attachment.deleted', {
-      attachmentId: id,
-      requestId:    attachment.requestId,
-      stepId:       attachment.approvalStepId,
-      deletedById: userId,
-    });
-
+    this.eventEmitter.emit('attachment.deleted', { attachmentId: id, requestId: attachment.requestId, stepId: attachment.approvalStepId, deletedById: userId });
     this.logger.log(`[AttachmentsService] deleted attachment: ${id}`);
   }
 
-  // ── File validation ───────────────────────────────────────────────────────
-
   private async validateFile(file: Express.Multer.File): Promise<void> {
-    // Read allowed MIME types and max size from SystemConfig
     const [mimeConfig, sizeConfig] = await Promise.all([
-      prisma.systemConfig.findUnique({ where: { key: 'allowed_mime_types' } }),
-      prisma.systemConfig.findUnique({ where: { key: 'max_upload_size_mb' } }),
+      this.prisma.systemConfig.findUnique({ where: { key: 'allowed_mime_types' } }),
+      this.prisma.systemConfig.findUnique({ where: { key: 'max_upload_size_mb'  } }),
     ]);
 
-    const allowedMimes = (
-      mimeConfig?.value ??
-      'application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    ).split(',').map(m => m.trim());
+    const allowedMimes = (mimeConfig?.value ?? 'application/pdf,image/jpeg,image/png,application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+      .split(',').map(m => m.trim());
 
     const maxSizeMb = parseInt(sizeConfig?.value ?? '10', 10);
     const maxBytes  = maxSizeMb * 1024 * 1024;
 
-    // Size check
     if (file.size > maxBytes) {
-      throw new BadRequestException(
-        `File size ${(file.size / 1024 / 1024).toFixed(2)}MB exceeds the maximum allowed size of ${maxSizeMb}MB`,
-      );
+      throw new BadRequestException(`File size ${(file.size / 1024 / 1024).toFixed(2)}MB exceeds the maximum of ${maxSizeMb}MB`);
     }
 
-    // MIME type check — validate both the declared mimetype and the extension-derived type
-    const extensionMime = mimeTypes.lookup(file.originalname);
-    const declaredMime  = file.mimetype;
+    const extensionMime  = mimeTypes.lookup(file.originalname);
+    const declaredMime   = file.mimetype;
+    const isAllowed      = allowedMimes.includes(declaredMime) || (!!extensionMime && allowedMimes.includes(extensionMime));
 
-    const isAllowedDeclared  = allowedMimes.includes(declaredMime);
-    const isAllowedExtension = extensionMime && allowedMimes.includes(extensionMime);
-
-    if (!isAllowedDeclared && !isAllowedExtension) {
-      throw new BadRequestException(
-        `File type "${declaredMime}" is not allowed. ` +
-        `Allowed types: PDF, JPEG, PNG, DOCX`,
-      );
+    if (!isAllowed) {
+      throw new BadRequestException(`File type "${declaredMime}" is not allowed. Allowed: PDF, JPEG, PNG, DOCX`);
     }
   }
 }

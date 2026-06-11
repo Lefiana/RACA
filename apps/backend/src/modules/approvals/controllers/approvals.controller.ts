@@ -68,6 +68,20 @@ export class ApprovalsController {
     return this.approvalsService.findByRequest(requestId);
   }
 
+  @Get(':stepId')
+  @Roles(...APPROVER_ROLES)
+  @ApiOperation({ summary: 'Get a single approval step with request context' })
+  async findOne(
+    @Session()       session: UserSession,
+    @Param('stepId') stepId:  string,
+  ) {
+    return this.approvalsService.findStepById(
+      stepId,
+      session.user.id,
+      (session.user as any).role,
+    );
+  }
+
   // POST /api/v1/approvals/:stepId/approve
   @Post(':stepId/approve')
   @HttpCode(HttpStatus.OK)

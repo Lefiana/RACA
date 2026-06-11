@@ -33,6 +33,15 @@ export interface IUpdateRoleDto {
   role: UserRole;
 }
 
+export interface ICreateUserDto {
+  name:        string;
+  email:       string;
+  password:    string;
+  username?:   string;
+  department?: string;
+  role:        UserRole;
+}
+
 export interface IUsersQuery {
   page?:   number;
   limit?:  number;

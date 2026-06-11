@@ -21,7 +21,7 @@ export class UpdateRequestDto extends PartialType(CreateRequestDto) {}
 // Dependencies: class-validator, class-transformer, @nestjs/swagger, @repo/database
 
 import { IsDateString, IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { RequestStatus } from '@repo/database';
 
@@ -62,4 +62,9 @@ export class QueryRequestDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ enum: ['owner', 'approver'] })
+  @IsOptional()
+  @IsEnum(['owner', 'approver'])
+  viewAs?: 'owner' | 'approver';
 }

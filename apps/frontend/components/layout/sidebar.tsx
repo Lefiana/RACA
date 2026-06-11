@@ -16,7 +16,7 @@ interface INavItem {
 
 const NAV_ITEMS: INavItem[] = [
   { label: 'Dashboard',     href: '/dashboard'                                                                          },
-  { label: 'My Requests',   href: '/requests',    roles: ['REQUESTOR', 'ADVISER', 'DEPARTMENT_HEAD']                   },
+  { label: 'My Requests',   href: '/requests',    roles: ['REQUESTOR', 'ADVISER', 'DEPARTMENT_HEAD', 'SUPER_ADMIN']                   },
   { label: 'Approvals',     href: '/approvals',   roles: ['ADVISER', 'DEPARTMENT_HEAD', 'MIS', 'BUILDING_ADMIN', 'STUDENT_AFFAIRS', 'ACADEMIC_HEAD', 'SCHOOL_ADMIN'] },
   { label: 'Venues',        href: '/venues'                                                                              },
   { label: 'Assets',        href: '/assets'                                                                              },

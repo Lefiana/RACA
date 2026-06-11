@@ -1,14 +1,13 @@
 // File: apps/frontend/app/(dashboard)/layout.tsx
-// Purpose: Authenticated layout — sidebar + topbar shell
-//          Redirects to /login if no session
-// Dependencies: useSession, Sidebar, Navbar
+// CHANGED: added retry delay before redirecting to avoid race condition
+//          on first login where cookie isn't immediately readable
 'use client';
 
-import { useEffect }      from 'react';
-import { useRouter }      from 'next/navigation';
-import { useSession }     from '../lib/auth/hooks';
-import { Sidebar }        from '../../components/layout/sidebar';
-import { Navbar }         from '../../components/layout/navbar';
+import { useEffect, useState } from 'react';
+import { useRouter }           from 'next/navigation';
+import { useSession }          from '../lib/auth/hooks';
+import { Sidebar }             from '../../components/layout/sidebar';
+import { Navbar }              from '../../components/layout/navbar';
 
 export default function DashboardLayout({
   children,
@@ -17,14 +16,28 @@ export default function DashboardLayout({
 }) {
   const { data: session, isLoading } = useSession();
   const router = useRouter();
+  // CHANGED: track if we've waited long enough to be sure there's no session
+  const [readyToRedirect, setReadyToRedirect] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !session) {
+      // CHANGED: wait 500ms before redirecting — gives the cookie time
+      // to be readable after a fresh login redirect
+      const timer = setTimeout(() => setReadyToRedirect(true), 500);
+      return () => clearTimeout(timer);
+    }
+    if (session) {
+      setReadyToRedirect(false);
+    }
+  }, [session, isLoading]);
+
+  useEffect(() => {
+    if (readyToRedirect && !session && !isLoading) {
       router.push('/login');
     }
-  }, [session, isLoading, router]);
+  }, [readyToRedirect, session, isLoading, router]);
 
-  if (isLoading) {
+  if (isLoading || (!session && !readyToRedirect)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <p className="text-sm text-muted-foreground">Loading...</p>

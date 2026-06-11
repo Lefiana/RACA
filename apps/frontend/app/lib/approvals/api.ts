@@ -19,6 +19,11 @@ export async function getPendingApprovals(
   return res.data;
 }
 
+export async function getStepById(stepId: string): Promise<IApprovalStep> {
+  const res = await apiClient.get<IApprovalStep>(`/approvals/${stepId}`);
+  return res.data;
+}
+
 export async function getApprovalsByRequest(
   requestId: string,
 ): Promise<IApprovalStep[]> {

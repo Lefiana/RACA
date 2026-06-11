@@ -8,6 +8,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { GraphQLModule }   from '@nestjs/graphql';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { join }            from 'path';
+import { PrismaService } from './prisma.service';
 
 import { AuthModule }         from './modules/auth/auth.module';
 import { RequestsModule }     from './modules/requests/requests.module';
@@ -48,14 +49,12 @@ import { RolesGuard }         from './modules/auth/guards/roles.guard';
     SchedulesModule,
   ],
   providers: [
-    // CHANGED: RolesGuard registered LAST — after AuthModule has already
-    // registered BetterAuthModule's AuthGuard, guaranteeing execution order:
-    // 1. Better Auth AuthGuard → populates request.user
-    // 2. RolesGuard → reads request.user and checks roles
+    PrismaService, // CHANGED: added
     {
       provide:  APP_GUARD,
       useClass: RolesGuard,
     },
   ],
+  exports: [PrismaService], // CHANGED: added
 })
 export class AppModule {}

@@ -42,6 +42,7 @@ export interface IRequestApprovalStep {
   id:              string;
   stage:           string;
   stepOrder:       number;
+  approverId:      string | null;
   status:          string;
   approverName:    string | null;
   approverRole:    string | null;
@@ -105,6 +106,7 @@ export interface IRequestsQuery {
   dateFrom?: string;
   dateTo?:   string;
   search?:   string;
+  viewAs?:   'owner' | 'approver'; // CHANGED: added
 }
 
 export type IRequestsResponse = IPaginatedResponse<IRequest>;

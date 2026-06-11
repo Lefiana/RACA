@@ -73,6 +73,23 @@ export class ApprovalsService {
     return this.approvalsRepo.findStepsByRequestId(requestId);
   }
 
+  async findStepById(stepId: string, userId: string, userRole: string) {
+  const step = await this.approvalsRepo.findStepById(stepId);
+  if (!step) throw new NotFoundException('Approval step not found');
+
+  // Verify the user is the assigned approver or has the matching role
+  const { ROLE_TO_STAGE } = await import('../domain/entities/approval-step.entity');
+  const userStage          = ROLE_TO_STAGE[userRole] ?? null;
+  const isAssigned         = step.approverId === userId;
+  const isRoleFallback     = step.approverId === null && userStage === step.stage;
+
+  if (!isAssigned && !isRoleFallback) {
+    throw new ForbiddenException('You are not authorized to view this step');
+  }
+
+  return step;
+  }
+
   // ── Approve ───────────────────────────────────────────────────────────────
 
   async approve(

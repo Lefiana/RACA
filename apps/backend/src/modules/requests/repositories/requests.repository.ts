@@ -1,20 +1,18 @@
 // File: apps/backend/src/modules/requests/repositories/requests.repository.ts
 // Purpose: All Prisma queries for requests, venue bookings, asset checkouts,
-//          and approval step scaffolding. The service layer never calls
-//          prisma directly — all DB access goes through this repository.
-// Dependencies: @repo/database, @nestjs/common
+//          and approval step scaffolding.
+// Dependencies: PrismaService, @nestjs/common, @repo/database
+// CHANGED: inject PrismaService instead of importing prisma directly
 
 import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../../prisma.service';
 import {
-  prisma,
   Prisma,
   RequestStatus,
   ApprovalStatus,
   ApprovalStage,
 } from '@repo/database';
 
-// The full include shape used for single-request queries.
-// Defined once here so the service and controller get consistent data.
 const REQUEST_FULL_INCLUDE = {
   requestedBy: {
     select: {
@@ -36,39 +34,47 @@ const REQUEST_FULL_INCLUDE = {
 
 @Injectable()
 export class RequestsRepository {
-
-  // ── Reads ─────────────────────────────────────────────────────────────────
+  // CHANGED: inject PrismaService
+  constructor(private readonly prisma: PrismaService) {}
 
   async findById(id: string) {
-    return prisma.request.findFirst({
+    return this.prisma.request.findFirst({
       where:   { id, deletedAt: null },
       include: REQUEST_FULL_INCLUDE,
     });
   }
 
   async findMany(params: {
-    skip:         number;
-    take:         number;
-    status?:      RequestStatus;
-    dateFrom?:    string;
-    dateTo?:      string;
-    search?:      string;
-    // When provided, restricts results to requests owned by this user.
-    // Omit for admin roles who can see everything.
-    requestedById?: string;
+    skip:               number;
+    take:               number;
+    status?:            RequestStatus;
+    dateFrom?:          string;
+    dateTo?:            string;
+    search?:            string;
+    requestedById?:     string;
+    assignedApproverId?: string; // CHANGED: new
   }) {
-    const { skip, take, status, dateFrom, dateTo, search, requestedById } = params;
+    const {
+      skip, take, status, dateFrom, dateTo,
+      search, requestedById, assignedApproverId,
+    } = params;
 
     const where: Prisma.RequestWhereInput = {
       deletedAt: null,
       ...(requestedById && { requestedById }),
-      ...(status         && { status }),
-      ...(dateFrom || dateTo) && {
+      // CHANGED: filter by assigned approver via approvalSteps relation
+      ...(assignedApproverId && {
+        approvalSteps: {
+          some: { approverId: assignedApproverId },
+        },
+      }),
+      ...(status && { status }),
+      ...((dateFrom || dateTo) && {
         activityStartAt: {
           ...(dateFrom && { gte: new Date(dateFrom) }),
           ...(dateTo   && { lte: new Date(dateTo)   }),
         },
-      },
+      }),
       ...(search && {
         OR: [
           { activityTitle:   { contains: search, mode: 'insensitive' } },
@@ -77,8 +83,8 @@ export class RequestsRepository {
       }),
     };
 
-    const [data, total] = await prisma.$transaction([
-      prisma.request.findMany({
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.request.findMany({
         where,
         skip,
         take,
@@ -87,7 +93,6 @@ export class RequestsRepository {
           requestedBy: {
             select: { id: true, name: true, department: true },
           },
-          // Only return step statuses in the list view — not full step detail
           approvalSteps: {
             select: { stage: true, status: true, stepOrder: true },
             orderBy: { stepOrder: 'asc' },
@@ -97,25 +102,22 @@ export class RequestsRepository {
           },
         },
       }),
-      prisma.request.count({ where }),
+      this.prisma.request.count({ where }),
     ]);
 
     return { data, total };
   }
 
-  // Checks for venue booking conflicts (isLocked = true) in the same window.
-  // Used during submit to reject conflicting requests before they enter the chain.
   async findConflictingVenueBookings(
     venueIds: string[],
     startAt:  Date,
     endAt:    Date,
     excludeRequestId?: string,
   ) {
-    return prisma.venueBooking.findMany({
+    return this.prisma.venueBooking.findMany({
       where: {
         venueId:   { in: venueIds },
         isLocked:  true,
-        // Overlap condition: existing booking overlaps with requested window
         bufferStartAt: { lt: endAt   },
         bufferEndAt:   { gt: startAt },
         ...(excludeRequestId && {
@@ -129,18 +131,14 @@ export class RequestsRepository {
     });
   }
 
-  // Generates the next reference number for today.
-  // Format: RACA-YYYYMMDD-XXXX (e.g. RACA-20250615-0001)
-  // Counts today's requests and zero-pads the sequence.
   async generateReferenceNumber(prefix: string): Promise<string> {
     const today    = new Date();
-    const datePart = today.toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
+    const datePart = today.toISOString().slice(0, 10).replace(/-/g, '');
 
-    // Count requests already created today to get the next sequence number
     const startOfDay = new Date(today.setHours(0, 0, 0, 0));
     const endOfDay   = new Date(today.setHours(23, 59, 59, 999));
 
-    const count = await prisma.request.count({
+    const count = await this.prisma.request.count({
       where: {
         createdAt: { gte: startOfDay, lte: endOfDay },
       },
@@ -150,10 +148,6 @@ export class RequestsRepository {
     return `${prefix}-${datePart}-${sequence}`;
   }
 
-  // ── Writes ────────────────────────────────────────────────────────────────
-
-  // Creates the Request row + VenueBooking rows + AssetCheckout rows
-  // in a single transaction. Status is always DRAFT at creation.
   async create(data: {
     referenceNumber:      string;
     requestedById:        string;
@@ -182,7 +176,7 @@ export class RequestsRepository {
     const bufferStartAt = new Date(activityStartAt.getTime() - bufferMs);
     const bufferEndAt   = new Date(activityEndAt.getTime()   + bufferMs);
 
-    return prisma.request.create({
+    return this.prisma.request.create({
       data: {
         ...requestData,
         activityStartAt,
@@ -209,9 +203,6 @@ export class RequestsRepository {
     });
   }
 
-  // Updates a DRAFT or PENDING request.
-  // Resets all approval steps to PENDING when editing a PENDING request
-  // since content has changed and the adviser must re-review.
   async update(id: string, data: {
     activityTitle?:        string;
     theme?:                string;
@@ -236,15 +227,13 @@ export class RequestsRepository {
       ...updateFields
     } = data;
 
-    return prisma.$transaction(async (tx) => {
-      // If dates changed, rebuild venue bookings
+    return this.prisma.$transaction(async (tx) => {
       const needsRebookVenues =
         venues !== undefined ||
         activityStartAt !== undefined ||
         activityEndAt !== undefined;
 
       if (needsRebookVenues && venues !== undefined) {
-        // Remove existing venue bookings and recreate
         await tx.venueBooking.deleteMany({ where: { requestId: id } });
 
         if (venues.length > 0 && activityStartAt && activityEndAt) {
@@ -266,7 +255,6 @@ export class RequestsRepository {
         }
       }
 
-      // Rebuild asset checkouts if changed
       if (assets !== undefined) {
         await tx.assetCheckout.deleteMany({ where: { requestId: id } });
         if (assets.length > 0) {
@@ -280,8 +268,6 @@ export class RequestsRepository {
         }
       }
 
-      // Reset all approval steps when editing a PENDING request
-      // The adviser needs to re-review from scratch because content changed
       if (resetApprovalSteps) {
         await tx.approvalStep.updateMany({
           where: { requestId: id },
@@ -310,13 +296,8 @@ export class RequestsRepository {
     });
   }
 
-  // Scaffolds all 7 ApprovalStep rows in one transaction when submitting.
-  // Each step is created in PENDING state with the correct stage and order.
-  // approverId is set where a user with that role exists in the system —
-  // the Approvals module will handle finding/notifying the right person.
   async submitRequest(id: string, approverMap: Record<ApprovalStage, string | null>) {
-    return prisma.$transaction(async (tx) => {
-      // Define the full ordered chain
+    return this.prisma.$transaction(async (tx) => {
       const steps: { stage: ApprovalStage; stepOrder: number; title: string }[] = [
         { stage: ApprovalStage.STAGE_1_ADVISER,                  stepOrder: 1, title: 'Adviser'                  },
         { stage: ApprovalStage.STAGE_1_DEPT_HEAD,                stepOrder: 2, title: 'Department Head'          },
@@ -327,7 +308,6 @@ export class RequestsRepository {
         { stage: ApprovalStage.STAGE_3_SCHOOL_ADMIN,             stepOrder: 7, title: 'School Administrator'     },
       ];
 
-      // Create all 7 steps
       await tx.approvalStep.createMany({
         data: steps.map(step => ({
           requestId:     id,
@@ -337,10 +317,9 @@ export class RequestsRepository {
           approverId:    approverMap[step.stage] ?? null,
           status:        ApprovalStatus.PENDING,
         })),
-        skipDuplicates: true, // safe re-submit guard (edit → re-submit)
+        skipDuplicates: true,
       });
 
-      // Transition to PENDING
       return tx.request.update({
         where: { id },
         data: {
@@ -352,9 +331,8 @@ export class RequestsRepository {
     });
   }
 
-  // Soft cancellation — sets deletedAt and status = CANCELLED
   async cancel(id: string) {
-    return prisma.request.update({
+    return this.prisma.request.update({
       where: { id },
       data: {
         status:    RequestStatus.CANCELLED,
@@ -363,9 +341,8 @@ export class RequestsRepository {
     });
   }
 
-  // Used by the service to verify ownership and editability
   async findRawById(id: string) {
-    return prisma.request.findFirst({
+    return this.prisma.request.findFirst({
       where: { id, deletedAt: null },
       select: {
         id:            true,

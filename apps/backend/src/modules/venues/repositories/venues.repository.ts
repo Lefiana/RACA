@@ -1,24 +1,19 @@
 // File: apps/backend/src/modules/venues/repositories/venues.repository.ts
-// Purpose: All Prisma queries for venue CRUD, availability checking,
-//          and booking history. Service never calls prisma directly.
-// Dependencies: @repo/database, @nestjs/common
-
+// CHANGED: inject PrismaService
 import { Injectable } from '@nestjs/common';
-import { prisma, Prisma, VenueStatus } from '@repo/database';
+import { PrismaService } from '../../../prisma.service';
+import { Prisma, VenueStatus } from '@repo/database';
 
 @Injectable()
 export class VenuesRepository {
-
-  // ── Reads ─────────────────────────────────────────────────────────────────
+  constructor(private readonly prisma: PrismaService) {}
 
   async findById(id: string) {
-    return prisma.venue.findFirst({
-      where: { id, deletedAt: null },
-    });
+    return this.prisma.venue.findFirst({ where: { id, deletedAt: null } });
   }
 
   async findByIdWithBookings(id: string) {
-    return prisma.venue.findFirst({
+    return this.prisma.venue.findFirst({
       where:   { id, deletedAt: null },
       include: {
         bookings: {
@@ -31,12 +26,12 @@ export class VenuesRepository {
           include: {
             request: {
               select: {
-                id:             true,
+                id:              true,
                 referenceNumber: true,
-                activityTitle:  true,
-                status:         true,
+                activityTitle:   true,
+                status:          true,
                 activityStartAt: true,
-                activityEndAt:  true,
+                activityEndAt:   true,
               },
             },
           },
@@ -50,12 +45,7 @@ export class VenuesRepository {
     });
   }
 
-  async findMany(params: {
-    skip:     number;
-    take:     number;
-    status?:  VenueStatus;
-    search?:  string;
-  }) {
+  async findMany(params: { skip: number; take: number; status?: VenueStatus; search?: string }) {
     const { skip, take, status, search } = params;
 
     const where: Prisma.VenueWhereInput = {
@@ -70,30 +60,19 @@ export class VenuesRepository {
       }),
     };
 
-    const [data, total] = await prisma.$transaction([
-      prisma.venue.findMany({
-        where,
-        skip,
-        take,
-        orderBy: [{ building: 'asc' }, { name: 'asc' }],
-      }),
-      prisma.venue.count({ where }),
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.venue.findMany({ where, skip, take, orderBy: [{ building: 'asc' }, { name: 'asc' }] }),
+      this.prisma.venue.count({ where }),
     ]);
 
     return { data, total };
   }
 
-  // Returns all bookings in a date range for availability display.
-  // Used by the calendar / availability endpoint.
   async findAvailability(id: string, from: Date, to: Date) {
-    return prisma.venueBooking.findMany({
+    return this.prisma.venueBooking.findMany({
       where: {
         venueId: id,
-        OR: [
-          { isLocked:    true },
-          { confirmedAt: { not: null } },
-        ],
-        // Overlap — any booking whose buffer window intersects the query range
+        OR: [{ isLocked: true }, { confirmedAt: { not: null } }],
         bufferStartAt: { lt: to   },
         bufferEndAt:   { gt: from },
       },
@@ -113,52 +92,38 @@ export class VenuesRepository {
   }
 
   async findByName(name: string) {
-    return prisma.venue.findFirst({
-      where: { name, deletedAt: null },
-    });
+    return this.prisma.venue.findFirst({ where: { name, deletedAt: null } });
   }
 
-  // ── Writes ────────────────────────────────────────────────────────────────
-
   async create(data: Prisma.VenueCreateInput) {
-    return prisma.venue.create({ data });
+    return this.prisma.venue.create({ data });
   }
 
   async update(id: string, data: Prisma.VenueUpdateInput) {
-    return prisma.venue.update({
-      where: { id },
-      data,
-    });
+    return this.prisma.venue.update({ where: { id }, data });
   }
 
   async setStatus(id: string, status: VenueStatus) {
-    return prisma.venue.update({
-      where: { id },
-      data:  { status },
-    });
+    return this.prisma.venue.update({ where: { id }, data: { status } });
   }
 
   async softDelete(id: string) {
-    return prisma.venue.update({
+    return this.prisma.venue.update({
       where: { id },
       data:  { deletedAt: new Date(), status: VenueStatus.BLOCKED },
     });
   }
 
-  // Creates a maintenance log entry alongside setting status to MAINTENANCE
   async setMaintenance(id: string, data: {
-    title:       string;
+    title:        string;
     description?: string;
-    startAt:     Date;
-    endAt?:      Date;
-    loggedById?: string;
+    startAt:      Date;
+    endAt?:       Date;
+    loggedById?:  string;
   }) {
-    return prisma.$transaction([
-      prisma.venue.update({
-        where: { id },
-        data:  { status: VenueStatus.MAINTENANCE },
-      }),
-      prisma.maintenanceLog.create({
+    return this.prisma.$transaction([
+      this.prisma.venue.update({ where: { id }, data: { status: VenueStatus.MAINTENANCE } }),
+      this.prisma.maintenanceLog.create({
         data: {
           venueId:     id,
           title:       data.title,

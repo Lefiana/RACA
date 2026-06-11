@@ -1,49 +1,31 @@
 // File: apps/backend/src/modules/notifications/repositories/notifications.repository.ts
-// Purpose: All Prisma queries for notification records.
-// Dependencies: @repo/database, @nestjs/common
-
+// CHANGED: inject PrismaService
 import { Injectable } from '@nestjs/common';
-import { prisma, NotificationType } from '@repo/database';
+import { PrismaService } from '../../../prisma.service';
+import { NotificationType } from '@repo/database';
 
 @Injectable()
 export class NotificationsRepository {
+  constructor(private readonly prisma: PrismaService) {}
 
-  async findMany(params: {
-    userId:      string;
-    skip:        number;
-    take:        number;
-    unreadOnly?: boolean;
-  }) {
+  async findMany(params: { userId: string; skip: number; take: number; unreadOnly?: boolean }) {
     const { userId, skip, take, unreadOnly } = params;
+    const where = { userId, ...(unreadOnly && { isRead: false }) };
 
-    const where = {
-      userId,
-      // CHANGED: isRead is the indexed boolean field — use it, not readAt
-      ...(unreadOnly && { isRead: false }),
-    };
-
-    const [data, total] = await prisma.$transaction([
-      prisma.notification.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { createdAt: 'desc' },
-      }),
-      prisma.notification.count({ where }),
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.notification.findMany({ where, skip, take, orderBy: { createdAt: 'desc' } }),
+      this.prisma.notification.count({ where }),
     ]);
 
     return { data, total };
   }
 
   async countUnread(userId: string): Promise<number> {
-    // CHANGED: isRead: false — matches the @@index([userId, isRead]) for performance
-    return prisma.notification.count({
-      where: { userId, isRead: false },
-    });
+    return this.prisma.notification.count({ where: { userId, isRead: false } });
   }
 
   async findById(id: string) {
-    return prisma.notification.findUnique({ where: { id } });
+    return this.prisma.notification.findUnique({ where: { id } });
   }
 
   async create(data: {
@@ -55,7 +37,7 @@ export class NotificationsRepository {
     stepId?:    string;
     metadata?:  Record<string, any>;
   }) {
-    return prisma.notification.create({
+    return this.prisma.notification.create({
       data: {
         userId:    data.userId,
         type:      data.type,
@@ -69,16 +51,11 @@ export class NotificationsRepository {
   }
 
   async markOneRead(id: string) {
-    // CHANGED: set both isRead and readAt together
-    return prisma.notification.update({
-      where: { id },
-      data:  { isRead: true, readAt: new Date() },
-    });
+    return this.prisma.notification.update({ where: { id }, data: { isRead: true, readAt: new Date() } });
   }
 
   async markAllRead(userId: string) {
-    // CHANGED: set both isRead and readAt together
-    return prisma.notification.updateMany({
+    return this.prisma.notification.updateMany({
       where: { userId, isRead: false },
       data:  { isRead: true, readAt: new Date() },
     });

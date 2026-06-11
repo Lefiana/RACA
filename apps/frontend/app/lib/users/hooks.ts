@@ -12,8 +12,10 @@ import {
   getUsers,
   toggleUserActive,
   updateUserRole,
+  createUser
 } from './api';
-import type { IUpdateRoleDto, IUsersQuery } from './types';
+import type { IUpdateRoleDto, IUsersQuery, ICreateUserDto} from './types';
+
 
 export const userKeys = {
   all:    ['users']                              as const,
@@ -22,6 +24,17 @@ export const userKeys = {
   detail: (id: string) => [...userKeys.all, 'detail', id] as const,
   me:     ['users', 'me']                        as const,
 };
+
+export function useCreateUser() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (dto: ICreateUserDto) => createUser(dto),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: userKeys.lists() });
+    },
+  });
+}
 
 export function useUsers(query?: IUsersQuery) {
   return useQuery({

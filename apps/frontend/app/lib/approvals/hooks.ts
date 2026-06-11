@@ -10,6 +10,7 @@ import {
   getApprovalsByRequest,
   getPendingApprovals,
   rejectStep,
+  getStepById
 } from './api';
 import type { IApprovalsQuery, IDecideApprovalDto } from './types';
 import { requestKeys } from '../requests/hooks';
@@ -25,6 +26,14 @@ export function usePendingApprovals(query?: IApprovalsQuery) {
   return useQuery({
     queryKey: approvalKeys.pending(query ?? {}),
     queryFn:  () => getPendingApprovals(query),
+  });
+}
+
+export function useApprovalStep(stepId: string) {
+  return useQuery({
+    queryKey: [...approvalKeys.all, 'step', stepId],
+    queryFn:  () => getStepById(stepId),
+    enabled:  !!stepId,
   });
 }
 

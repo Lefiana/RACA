@@ -1,11 +1,9 @@
 // File: apps/backend/src/modules/notifications/listeners/notifications.listener.ts
-// Purpose: Domain event listeners. All handlers wrapped in try/catch.
-// Dependencies: @nestjs/event-emitter, NotificationsService, @repo/database, prisma
-
+// CHANGED: inject PrismaService instead of importing prisma directly
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent }            from '@nestjs/event-emitter';
-import { prisma, NotificationType, ApprovalStage, UserRole } from '@repo/database';
-
+import { NotificationType, ApprovalStage, UserRole } from '@repo/database';
+import { PrismaService }        from '../../../prisma.service';
 import { NotificationsService } from '../services/notifications.service';
 
 const STAGE_LABEL: Record<ApprovalStage, string> = {
@@ -39,24 +37,21 @@ const STAGE2_STAGES: ApprovalStage[] = [
 export class NotificationsListener {
   private readonly logger = new Logger(NotificationsListener.name);
 
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly prisma:               PrismaService, // CHANGED
+  ) {}
 
   @OnEvent('request.submitted')
-  async onRequestSubmitted(payload: {
-    requestId:       string;
-    userId:          string;
-    referenceNumber: string;
-  }) {
+  async onRequestSubmitted(payload: { requestId: string; userId: string; referenceNumber: string }) {
     try {
-      const advisers = await prisma.user.findMany({
+      const advisers = await this.prisma.user.findMany({
         where:  { role: 'ADVISER', isActive: true, deletedAt: null },
         select: { id: true },
       });
-
       for (const adviser of advisers) {
         await this.notificationsService.createAndPush({
           userId:    adviser.id,
-          // CHANGED: NotificationType.REQUEST_SUBMITTED — exists in schema
           type:      NotificationType.REQUEST_SUBMITTED,
           title:     'New request awaiting your review',
           body:      `Request ${payload.referenceNumber} has been submitted and requires your approval.`,
@@ -69,42 +64,31 @@ export class NotificationsListener {
   }
 
   @OnEvent('request.stage.advanced')
-  async onStageAdvanced(payload: {
-    requestId:  string;
-    fromStatus: string;
-    toStatus:   string;
-  }) {
+  async onStageAdvanced(payload: { requestId: string; fromStatus: string; toStatus: string }) {
     try {
-      const request = await prisma.request.findUnique({
+      const request = await this.prisma.request.findUnique({
         where:  { id: payload.requestId },
         select: { referenceNumber: true, activityTitle: true },
       });
       if (!request) return;
 
       let stagesToNotify: ApprovalStage[] = [];
-
-      if (payload.toStatus === 'STAGE1_REVIEW') {
-        stagesToNotify = [ApprovalStage.STAGE_1_DEPT_HEAD];
-      } else if (payload.toStatus === 'STAGE2_REVIEW') {
-        stagesToNotify = STAGE2_STAGES;
-      } else if (payload.toStatus === 'PENDING_FINAL') {
-        stagesToNotify = [ApprovalStage.STAGE_3_SCHOOL_ADMIN];
-      }
+      if (payload.toStatus === 'STAGE1_REVIEW')  stagesToNotify = [ApprovalStage.STAGE_1_DEPT_HEAD];
+      else if (payload.toStatus === 'STAGE2_REVIEW') stagesToNotify = STAGE2_STAGES;
+      else if (payload.toStatus === 'PENDING_FINAL') stagesToNotify = [ApprovalStage.STAGE_3_SCHOOL_ADMIN];
 
       for (const stage of stagesToNotify) {
         const role = STAGE_TO_ROLE[stage];
-
-        const step = await prisma.approvalStep.findFirst({
+        const step = await this.prisma.approvalStep.findFirst({
           where:  { requestId: payload.requestId, stage },
           select: { approverId: true },
         });
 
         const userIdsToNotify: string[] = [];
-
         if (step?.approverId) {
           userIdsToNotify.push(step.approverId);
         } else {
-          const users = await prisma.user.findMany({
+          const users = await this.prisma.user.findMany({
             where:  { role: role as UserRole, isActive: true, deletedAt: null },
             select: { id: true },
           });
@@ -114,7 +98,6 @@ export class NotificationsListener {
         for (const userId of userIdsToNotify) {
           await this.notificationsService.createAndPush({
             userId,
-            // CHANGED: NotificationType.STAGE_ADVANCED
             type:      NotificationType.STAGE_ADVANCED,
             title:     `Request ready for ${STAGE_LABEL[stage]} review`,
             body:      `${request.referenceNumber} — "${request.activityTitle}" has advanced and requires your action.`,
@@ -129,22 +112,15 @@ export class NotificationsListener {
   }
 
   @OnEvent('approval.step.approved')
-  async onStepApproved(payload: {
-    stepId:     string;
-    requestId:  string;
-    stage:      ApprovalStage;
-    approverId: string;
-  }) {
+  async onStepApproved(payload: { stepId: string; requestId: string; stage: ApprovalStage; approverId: string }) {
     try {
-      const request = await prisma.request.findUnique({
+      const request = await this.prisma.request.findUnique({
         where:  { id: payload.requestId },
         select: { referenceNumber: true, requestedById: true },
       });
       if (!request) return;
-
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
-        // CHANGED: NotificationType.STEP_APPROVED
         type:      NotificationType.STEP_APPROVED,
         title:     `Your request was approved by ${STAGE_LABEL[payload.stage]}`,
         body:      `${request.referenceNumber} passed the ${STAGE_LABEL[payload.stage]} review.`,
@@ -158,23 +134,15 @@ export class NotificationsListener {
   }
 
   @OnEvent('approval.step.rejected')
-  async onStepRejected(payload: {
-    stepId:     string;
-    requestId:  string;
-    stage:      ApprovalStage;
-    approverId: string;
-    reason:     string;
-  }) {
+  async onStepRejected(payload: { stepId: string; requestId: string; stage: ApprovalStage; approverId: string; reason: string }) {
     try {
-      const request = await prisma.request.findUnique({
+      const request = await this.prisma.request.findUnique({
         where:  { id: payload.requestId },
         select: { referenceNumber: true, requestedById: true },
       });
       if (!request) return;
-
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
-        // CHANGED: NotificationType.STEP_REJECTED
         type:      NotificationType.STEP_REJECTED,
         title:     `Your request was rejected by ${STAGE_LABEL[payload.stage]}`,
         body:      `${request.referenceNumber} was rejected. Reason: ${payload.reason}`,
@@ -190,18 +158,16 @@ export class NotificationsListener {
   @OnEvent('request.approved')
   async onRequestApproved(payload: { requestId: string }) {
     try {
-      const request = await prisma.request.findUnique({
+      const request = await this.prisma.request.findUnique({
         where:  { id: payload.requestId },
         select: { referenceNumber: true, activityTitle: true, requestedById: true },
       });
       if (!request) return;
-
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
-        // CHANGED: NotificationType.REQUEST_APPROVED — exists in schema
         type:      NotificationType.REQUEST_APPROVED,
         title:     '🎉 Your request has been fully approved!',
-        body:      `${request.referenceNumber} — "${request.activityTitle}" is approved. Venue and assets are confirmed.`,
+        body:      `${request.referenceNumber} — "${request.activityTitle}" is approved.`,
         requestId: payload.requestId,
       });
     } catch (err: any) {
@@ -210,47 +176,25 @@ export class NotificationsListener {
   }
 
   @OnEvent('request.rejected')
-  async onRequestRejected(payload: {
-    requestId:       string;
-    referenceNumber: string;
-    rejectedBy:      string;
-    rejectedRole:    string;
-    stage:           ApprovalStage;
-    reason:          string;
-  }) {
-    try {
-      // Handled by approval.step.rejected — reserved for future email/SMS
-      this.logger.log(
-        `[Listener] request.rejected received for ${payload.referenceNumber} — handled by step.rejected`,
-      );
-    } catch (err: any) {
-      this.logger.error(`[Listener] request.rejected error: ${err.message}`);
-    }
+  async onRequestRejected(payload: { requestId: string; referenceNumber: string; rejectedBy: string; rejectedRole: string; stage: ApprovalStage; reason: string }) {
+    this.logger.log(`[Listener] request.rejected received for ${payload.referenceNumber} — handled by step.rejected`);
   }
 
   @OnEvent('asset.checked_out')
-  async onAssetCheckedOut(payload: {
-    assetId:     string;
-    checkoutId:  string;
-    requestId:   string;
-    handledById: string;
-  }) {
+  async onAssetCheckedOut(payload: { assetId: string; checkoutId: string; requestId: string; handledById: string }) {
     try {
-      const request = await prisma.request.findUnique({
+      const request = await this.prisma.request.findUnique({
         where:  { id: payload.requestId },
         select: { referenceNumber: true, requestedById: true },
       });
       if (!request) return;
-
-      const asset = await prisma.asset.findUnique({
+      const asset = await this.prisma.asset.findUnique({
         where:  { id: payload.assetId },
         select: { name: true, assetTag: true },
       });
       if (!asset) return;
-
       await this.notificationsService.createAndPush({
         userId:    request.requestedById,
-        // CHANGED: NotificationType.ASSET_CHECKED_OUT
         type:      NotificationType.ASSET_CHECKED_OUT,
         title:     'Asset checked out',
         body:      `${asset.name} (${asset.assetTag}) has been checked out for ${request.referenceNumber}.`,
@@ -263,29 +207,20 @@ export class NotificationsListener {
   }
 
   @OnEvent('asset.returned')
-  async onAssetReturned(payload: {
-    assetId:     string;
-    checkoutId:  string;
-    requestId:   string;
-    handledById: string;
-    condition:   string;
-  }) {
+  async onAssetReturned(payload: { assetId: string; checkoutId: string; requestId: string; handledById: string; condition: string }) {
     try {
-      const asset = await prisma.asset.findUnique({
+      const asset = await this.prisma.asset.findUnique({
         where:  { id: payload.assetId },
         select: { name: true, assetTag: true, custodianRole: true },
       });
       if (!asset) return;
-
-      const custodians = await prisma.user.findMany({
+      const custodians = await this.prisma.user.findMany({
         where:  { role: asset.custodianRole as unknown as UserRole, isActive: true, deletedAt: null },
         select: { id: true },
       });
-
       for (const custodian of custodians) {
         await this.notificationsService.createAndPush({
           userId:    custodian.id,
-          // CHANGED: NotificationType.ASSET_RETURNED
           type:      NotificationType.ASSET_RETURNED,
           title:     'Asset returned',
           body:      `${asset.name} (${asset.assetTag}) has been returned in ${payload.condition?.toLowerCase() ?? 'unknown'} condition.`,
