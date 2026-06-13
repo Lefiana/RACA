@@ -28,6 +28,7 @@ import { Session, UserSession } from '@thallesp/nestjs-better-auth';
 import { RequestsService }   from '../services/requests.service';
 import { CreateRequestDto }  from '../dto/create-request.dto';
 import { UpdateRequestDto, QueryRequestDto } from '../dto/query-update.dto';
+import { SubmitRequestDto }  from '../dto/submit-request.dto';
 
 // UserRole is read from session.user — the Better Auth additionalFields
 // make role available on the session user object directly.
@@ -56,15 +57,17 @@ export class RequestsController {
   // Performs venue conflict check before accepting.
   @Post(':id/submit')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Submit a DRAFT request for approval' })
+  @ApiOperation({ summary: 'Submit a DRAFT request for approval (adviserId required)' })
   async submit(
     @Session()    session: UserSession,
     @Param('id')  id:      string,
+    @Body()       dto:     SubmitRequestDto,
   ) {
     return this.requestsService.submit(
       id,
       session.user.id,
       (session.user as any).role,
+      dto.adviserId,
     );
   }
 

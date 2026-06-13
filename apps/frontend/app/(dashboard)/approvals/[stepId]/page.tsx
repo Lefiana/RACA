@@ -21,6 +21,33 @@ const STAGE_LABELS: Record<string, string> = {
   STAGE_3_SCHOOL_ADMIN:            'School Administrator Review',
 };
 
+// CHANGED: Helper — returns true only when the request's current status
+// matches the stage that this step belongs to. Prevents acting out of turn.
+function isStepActionable(
+  stage: string,
+  requestStatus: string,
+): boolean {
+  switch (stage) {
+    case 'STAGE_1_ADVISER':
+      return requestStatus === 'PENDING';
+
+    case 'STAGE_1_DEPT_HEAD':
+      return requestStatus === 'STAGE1_REVIEW';
+
+    case 'STAGE_2_MIS':
+    case 'STAGE_2_BUILDING':
+    case 'STAGE_2_ACADEMIC_HEAD':
+    case 'STAGE_2_HEAD_OF_STUDENT_AFFAIRS':
+      return requestStatus === 'STAGE2_REVIEW';
+
+    case 'STAGE_3_SCHOOL_ADMIN':
+      return requestStatus === 'PENDING_FINAL';
+
+    default:
+      return false;
+  }
+}
+
 export default function ApprovalStepPage() {
   const { stepId } = useParams<{ stepId: string }>();
   const router     = useRouter();
@@ -56,11 +83,27 @@ export default function ApprovalStepPage() {
     );
   }
 
-  const request    = step.request;
+  const request   = step.request;
   const isDecided  = step.status !== 'PENDING';
+
+  // CHANGED: Derive whether this user can act right now.
+  // Both conditions must be true:
+  //   1. The step itself is still PENDING (not already decided)
+  //   2. The request is in the correct status for this stage (it's this step's turn)
+  const canAct =
+    step?.status === 'PENDING' &&
+    isStepActionable(step?.stage ?? '', request?.status ?? '');
+
+  // CHANGED: Reason string shown when buttons are disabled — helps the approver
+  // understand why they can't act yet without guessing.
+  const notYetTurnReason =
+    step?.status === 'PENDING' && !canAct
+      ? 'This step is not yet actionable — a prior stage must be completed first.'
+      : null;
 
   const handleApprove = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canAct) return;
     await approveStep.mutateAsync({
       stepId: step.id,
       dto:    { remarks: remarks || undefined },
@@ -70,6 +113,7 @@ export default function ApprovalStepPage() {
 
   const handleReject = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canAct) return;
     await rejectStep.mutateAsync({
       stepId: step.id,
       dto:    { remarks: remarks || undefined, rejectionReason },
@@ -169,18 +213,27 @@ export default function ApprovalStepPage() {
         <div className="bg-card border border-border rounded-lg p-6 space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Your Decision</h2>
 
+          {/* CHANGED: Show a clear contextual message when step is disabled */}
+          {notYetTurnReason && (
+            <p className="text-sm text-muted-foreground mb-4 italic">
+              {notYetTurnReason}
+            </p>
+          )}
+
           {/* Mode selector */}
           {mode === 'view' && (
             <div className="flex gap-3">
               <button
                 onClick={() => setMode('approve')}
-                className="flex-1 py-2.5 text-sm font-medium bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                disabled={!canAct}
+                className="flex-1 py-2.5 text-sm font-medium bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-40 disabled:hover:bg-green-600 transition-colors"
               >
                 Approve
               </button>
               <button
                 onClick={() => setMode('reject')}
-                className="flex-1 py-2.5 text-sm font-medium border border-destructive/50 text-destructive rounded-md hover:bg-destructive/10 transition-colors"
+                disabled={!canAct}
+                className="flex-1 py-2.5 text-sm font-medium border border-destructive/50 text-destructive rounded-md hover:bg-destructive/10 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
               >
                 Reject
               </button>
@@ -220,7 +273,7 @@ export default function ApprovalStepPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !canAct}
                   className="flex-1 py-2 text-sm font-medium bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
                 >
                   {isSubmitting ? 'Approving...' : 'Confirm Approval'}
@@ -277,7 +330,7 @@ export default function ApprovalStepPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting || rejectionReason.length < 10}
+                  disabled={isSubmitting || rejectionReason.length < 10 || !canAct}
                   className="flex-1 py-2 text-sm font-medium bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 disabled:opacity-50 transition-colors"
                 >
                   {isSubmitting ? 'Rejecting...' : 'Confirm Rejection'}

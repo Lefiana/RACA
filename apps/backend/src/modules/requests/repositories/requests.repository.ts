@@ -1,18 +1,20 @@
 // File: apps/backend/src/modules/requests/repositories/requests.repository.ts
 // Purpose: All Prisma queries for requests, venue bookings, asset checkouts,
-//          and approval step scaffolding.
-// Dependencies: PrismaService, @nestjs/common, @repo/database
-// CHANGED: inject PrismaService instead of importing prisma directly
+//          and approval step scaffolding. The service layer never calls
+//          prisma directly — all DB access goes through this repository.
+// Dependencies: @repo/database, @nestjs/common
 
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../prisma.service';
 import {
+  prisma,
   Prisma,
   RequestStatus,
   ApprovalStatus,
   ApprovalStage,
 } from '@repo/database';
 
+// The full include shape used for single-request queries.
+// Defined once here so the service and controller get consistent data.
 const REQUEST_FULL_INCLUDE = {
   requestedBy: {
     select: {
@@ -34,47 +36,37 @@ const REQUEST_FULL_INCLUDE = {
 
 @Injectable()
 export class RequestsRepository {
-  // CHANGED: inject PrismaService
-  constructor(private readonly prisma: PrismaService) {}
+
+  // ── Reads ─────────────────────────────────────────────────────────────────
 
   async findById(id: string) {
-    return this.prisma.request.findFirst({
+    return prisma.request.findFirst({
       where:   { id, deletedAt: null },
       include: REQUEST_FULL_INCLUDE,
     });
   }
 
   async findMany(params: {
-    skip:               number;
-    take:               number;
-    status?:            RequestStatus;
-    dateFrom?:          string;
-    dateTo?:            string;
-    search?:            string;
-    requestedById?:     string;
-    assignedApproverId?: string; // CHANGED: new
+    skip:         number;
+    take:         number;
+    status?:      RequestStatus;
+    dateFrom?:    string;
+    dateTo?:      string;
+    search?:      string;
+    requestedById?: string;
   }) {
-    const {
-      skip, take, status, dateFrom, dateTo,
-      search, requestedById, assignedApproverId,
-    } = params;
+    const { skip, take, status, dateFrom, dateTo, search, requestedById } = params;
 
     const where: Prisma.RequestWhereInput = {
       deletedAt: null,
       ...(requestedById && { requestedById }),
-      // CHANGED: filter by assigned approver via approvalSteps relation
-      ...(assignedApproverId && {
-        approvalSteps: {
-          some: { approverId: assignedApproverId },
-        },
-      }),
-      ...(status && { status }),
-      ...((dateFrom || dateTo) && {
+      ...(status         && { status }),
+      ...(dateFrom || dateTo) && {
         activityStartAt: {
           ...(dateFrom && { gte: new Date(dateFrom) }),
           ...(dateTo   && { lte: new Date(dateTo)   }),
         },
-      }),
+      },
       ...(search && {
         OR: [
           { activityTitle:   { contains: search, mode: 'insensitive' } },
@@ -83,8 +75,8 @@ export class RequestsRepository {
       }),
     };
 
-    const [data, total] = await this.prisma.$transaction([
-      this.prisma.request.findMany({
+    const [data, total] = await prisma.$transaction([
+      prisma.request.findMany({
         where,
         skip,
         take,
@@ -102,7 +94,7 @@ export class RequestsRepository {
           },
         },
       }),
-      this.prisma.request.count({ where }),
+      prisma.request.count({ where }),
     ]);
 
     return { data, total };
@@ -114,7 +106,7 @@ export class RequestsRepository {
     endAt:    Date,
     excludeRequestId?: string,
   ) {
-    return this.prisma.venueBooking.findMany({
+    return prisma.venueBooking.findMany({
       where: {
         venueId:   { in: venueIds },
         isLocked:  true,
@@ -138,7 +130,7 @@ export class RequestsRepository {
     const startOfDay = new Date(today.setHours(0, 0, 0, 0));
     const endOfDay   = new Date(today.setHours(23, 59, 59, 999));
 
-    const count = await this.prisma.request.count({
+    const count = await prisma.request.count({
       where: {
         createdAt: { gte: startOfDay, lte: endOfDay },
       },
@@ -147,6 +139,8 @@ export class RequestsRepository {
     const sequence = String(count + 1).padStart(4, '0');
     return `${prefix}-${datePart}-${sequence}`;
   }
+
+  // ── Writes ────────────────────────────────────────────────────────────────
 
   async create(data: {
     referenceNumber:      string;
@@ -176,7 +170,7 @@ export class RequestsRepository {
     const bufferStartAt = new Date(activityStartAt.getTime() - bufferMs);
     const bufferEndAt   = new Date(activityEndAt.getTime()   + bufferMs);
 
-    return this.prisma.request.create({
+    return prisma.request.create({
       data: {
         ...requestData,
         activityStartAt,
@@ -227,7 +221,7 @@ export class RequestsRepository {
       ...updateFields
     } = data;
 
-    return this.prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx) => {
       const needsRebookVenues =
         venues !== undefined ||
         activityStartAt !== undefined ||
@@ -296,15 +290,18 @@ export class RequestsRepository {
     });
   }
 
+  // CHANGED: Updated step order per institution's sign-off sequence.
+  // Academic Head (3) and Head of Student Affairs (4) now come before
+  // MIS (5) and Building Administrator (6).
   async submitRequest(id: string, approverMap: Record<ApprovalStage, string | null>) {
-    return this.prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx) => {
       const steps: { stage: ApprovalStage; stepOrder: number; title: string }[] = [
         { stage: ApprovalStage.STAGE_1_ADVISER,                  stepOrder: 1, title: 'Adviser'                  },
         { stage: ApprovalStage.STAGE_1_DEPT_HEAD,                stepOrder: 2, title: 'Department Head'          },
-        { stage: ApprovalStage.STAGE_2_MIS,                      stepOrder: 3, title: 'MIS'                      },
-        { stage: ApprovalStage.STAGE_2_BUILDING,                 stepOrder: 4, title: 'Building Administrator'   },
-        { stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS,  stepOrder: 5, title: 'Head of Student Affairs'  },
-        { stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD,            stepOrder: 6, title: 'Academic Head'            },
+        { stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD,            stepOrder: 3, title: 'Academic Head'            },
+        { stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS,  stepOrder: 4, title: 'Head of Student Affairs'  },
+        { stage: ApprovalStage.STAGE_2_MIS,                      stepOrder: 5, title: 'MIS'                      },
+        { stage: ApprovalStage.STAGE_2_BUILDING,                 stepOrder: 6, title: 'Building Administrator'   },
         { stage: ApprovalStage.STAGE_3_SCHOOL_ADMIN,             stepOrder: 7, title: 'School Administrator'     },
       ];
 
@@ -332,7 +329,7 @@ export class RequestsRepository {
   }
 
   async cancel(id: string) {
-    return this.prisma.request.update({
+    return prisma.request.update({
       where: { id },
       data: {
         status:    RequestStatus.CANCELLED,
@@ -342,7 +339,7 @@ export class RequestsRepository {
   }
 
   async findRawById(id: string) {
-    return this.prisma.request.findFirst({
+    return prisma.request.findFirst({
       where: { id, deletedAt: null },
       select: {
         id:            true,

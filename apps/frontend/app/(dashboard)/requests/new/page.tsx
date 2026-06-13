@@ -1,17 +1,24 @@
 // File: apps/frontend/app/(dashboard)/requests/new/page.tsx
-// Purpose: Multi-section RACA request creation form
-// Dependencies: useCreateRequest, useSubmitRequest, useRouter
+// Purpose: Multi-section RACA request creation form with adviser selection
+// Dependencies: useCreateRequest, useSubmitRequest, useAdvisers, useRouter
 'use client';
 
 import { useState }          from 'react';
 import { useRouter }         from 'next/navigation';
 import { useCreateRequest, useSubmitRequest } from '../../../lib/requests/hooks';
+import { useAdvisers }       from '../../../lib/users/hooks'; // CHANGED: Import useAdvisers
 import type { ICreateRequestDto, ISpeaker } from '../../../lib/requests/types';
 
 export default function NewRequestPage() {
   const router        = useRouter();
   const createRequest = useCreateRequest();
   const submitRequest = useSubmitRequest();
+  const { data: advisersData, isLoading: advisersLoading } = useAdvisers(); // CHANGED: Fetch advisers
+
+  // CHANGED: Track selected adviser separately — it's only needed at submit time,
+  // not part of the saved DRAFT payload.
+  const [selectedAdviserId, setSelectedAdviserId] = useState<string>('');
+  const [adviserError, setAdviserError]           = useState<string>('');
 
   const [form, setForm] = useState<ICreateRequestDto>({
     activityTitle:   '',
@@ -30,7 +37,6 @@ export default function NewRequestPage() {
   });
 
   const [speakers, setSpeakers] = useState<ISpeaker[]>([]);
-  const [submitAfter, setSubmitAfter] = useState(false);
 
   const set = (field: keyof ICreateRequestDto) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -46,6 +52,13 @@ export default function NewRequestPage() {
     setSpeakers(prev => prev.filter((_, idx) => idx !== i));
 
   const handleSave = async (andSubmit = false) => {
+    // CHANGED: Validate adviser is selected before submitting.
+    if (andSubmit && !selectedAdviserId) {
+      setAdviserError('Please select an adviser before submitting.');
+      return;
+    }
+    setAdviserError('');
+
     const dto: ICreateRequestDto = {
       ...form,
       speakers,
@@ -57,13 +70,15 @@ export default function NewRequestPage() {
     const request = await createRequest.mutateAsync(dto);
 
     if (andSubmit) {
-      await submitRequest.mutateAsync(request.id);
+      // CHANGED: Pass object with id and adviserId matching operational hook structure
+      await submitRequest.mutateAsync({ id: request.id, adviserId: selectedAdviserId });
     }
 
     router.push(`/requests/${request.id}`);
   };
 
   const isLoading = createRequest.isPending || submitRequest.isPending;
+  const isFormInvalid = !form.activityTitle || !form.objectives || !form.activityStartAt || !form.activityEndAt;
 
   return (
     <div className="max-w-3xl space-y-8">
@@ -74,6 +89,42 @@ export default function NewRequestPage() {
           Request for Approval of Campus Activity
         </p>
       </div>
+
+      {/* CHANGED: Adviser selection — required before submission, shown prominently
+          at the top so the requestor picks their adviser first. */}
+      <section className="bg-card border border-border rounded-lg p-6 space-y-4">
+        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+          Select Your Adviser
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Choose the faculty adviser who will review this request first.
+        </p>
+
+        {advisersLoading ? (
+          <p className="text-sm text-muted-foreground">Loading advisers...</p>
+        ) : (
+          <select
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            value={selectedAdviserId}
+            onChange={e => {
+              setSelectedAdviserId(e.target.value);
+              setAdviserError('');
+            }}
+          >
+            <option value="">— Select an adviser —</option>
+            {advisersData?.data?.map(adviser => (
+              <option key={adviser.id} value={adviser.id}>
+                {adviser.name}
+                {adviser.department ? ` (${adviser.department})` : ''}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {adviserError && (
+          <p className="text-sm text-destructive font-medium">{adviserError}</p>
+        )}
+      </section>
 
       {/* Section I — Activity Info */}
       <section className="bg-card border border-border rounded-lg p-6 space-y-4">
@@ -303,7 +354,7 @@ export default function NewRequestPage() {
         <button
           type="button"
           onClick={() => handleSave(false)}
-          disabled={isLoading || !form.activityTitle || !form.objectives || !form.activityStartAt || !form.activityEndAt}
+          disabled={isLoading || isFormInvalid}
           className="px-4 py-2 text-sm border border-input rounded-md bg-background hover:bg-muted disabled:opacity-50 transition-colors"
         >
           {createRequest.isPending ? 'Saving...' : 'Save as Draft'}
@@ -311,7 +362,7 @@ export default function NewRequestPage() {
         <button
           type="button"
           onClick={() => handleSave(true)}
-          disabled={isLoading || !form.activityTitle || !form.objectives || !form.activityStartAt || !form.activityEndAt}
+          disabled={isLoading || isFormInvalid || !selectedAdviserId}
           className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           {isLoading ? 'Submitting...' : 'Save & Submit'}

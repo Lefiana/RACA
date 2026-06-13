@@ -72,6 +72,14 @@ export function useUpdateUserRole() {
   });
 }
 
+export function useAdvisers() {
+  return useQuery({
+    queryKey: ['users', 'advisers'],
+    queryFn:  () => getUsers({ role: 'ADVISER', limit: 100 }),
+    staleTime: 5 * 60 * 1000, // adviser list rarely changes — cache for 5 min
+  });
+}
+
 export function useToggleUserActive() {
   const queryClient = useQueryClient();
 

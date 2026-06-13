@@ -65,10 +65,11 @@ export function useSubmitRequest() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (id: string) => submitRequest(id),
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: requestKeys.detail(id) });
-      queryClient.invalidateQueries({ queryKey: requestKeys.lists() });
+    mutationFn: ({ id, adviserId }: { id: string; adviserId: string }) =>
+      submitRequest(id, adviserId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['requests'] });
+      queryClient.invalidateQueries({ queryKey: ['requests', data.id] });
     },
   });
 }

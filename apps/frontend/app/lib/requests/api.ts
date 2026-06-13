@@ -31,8 +31,11 @@ export async function updateRequest(id: string, dto: IUpdateRequestDto): Promise
   return res.data;
 }
 
-export async function submitRequest(id: string): Promise<IRequest> {
-  const res = await apiClient.post<IRequest>(`/requests/${id}/submit`);
+export async function submitRequest(
+  id:        string,
+  adviserId: string,
+): Promise<IRequest> {
+  const res = await apiClient.post<IRequest>(`/requests/${id}/submit`, { adviserId });
   return res.data;
 }
 

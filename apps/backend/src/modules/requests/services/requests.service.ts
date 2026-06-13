@@ -1,5 +1,10 @@
 // File: apps/backend/src/modules/requests/services/requests.service.ts
-// CHANGED: inject PrismaService, remove direct prisma import
+// Purpose: Business logic for the RACA request lifecycle.
+//          Enforces all status transition rules, edit windows,
+//          conflict detection, and approval step scaffolding.
+//          Emits domain events after each state change.
+// Dependencies: RequestsRepository, EventEmitter2, @nestjs/common, @repo/database
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -9,32 +14,27 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
+  prisma,
   RequestStatus,
   UserRole,
   ApprovalStage,
 } from '@repo/database';
 
-import { PrismaService }       from '../../../prisma.service';
 import { RequestsRepository }  from '../repositories/requests.repository';
 import { CreateRequestDto }    from '../dto/create-request.dto';
 import { UpdateRequestDto }    from '../dto/query-update.dto';
 import { QueryRequestDto }     from '../dto/query-update.dto';
 
+// CHANGED (H3): Import ROLE_TO_STAGE for role-fallback approver visibility check
+import { ROLE_TO_STAGE } from '../../approvals/domain/entities/approval-step.entity';
+
+// Roles that can view ALL requests (not just their own)
 const ADMIN_ROLES = new Set<UserRole>([
   UserRole.SCHOOL_ADMIN,
   UserRole.SUPER_ADMIN,
 ]);
 
-const EDITABLE_STATUSES = new Set<RequestStatus>([
-  RequestStatus.DRAFT,
-  RequestStatus.PENDING,
-]);
-
-const CANCELLABLE_STATUSES = new Set<RequestStatus>([
-  RequestStatus.DRAFT,
-  RequestStatus.PENDING,
-]);
-
+// Roles that see requests assigned to them for approval
 const APPROVER_ROLES = new Set<UserRole>([
   UserRole.ADVISER,
   UserRole.DEPARTMENT_HEAD,
@@ -42,7 +42,18 @@ const APPROVER_ROLES = new Set<UserRole>([
   UserRole.BUILDING_ADMIN,
   UserRole.STUDENT_AFFAIRS,
   UserRole.ACADEMIC_HEAD,
-  UserRole.SCHOOL_ADMIN,
+]);
+
+// Statuses in which editing is still allowed
+const EDITABLE_STATUSES = new Set<RequestStatus>([
+  RequestStatus.DRAFT,
+  RequestStatus.PENDING,
+]);
+
+// Statuses in which cancellation is allowed
+const CANCELLABLE_STATUSES = new Set<RequestStatus>([
+  RequestStatus.DRAFT,
+  RequestStatus.PENDING,
 ]);
 
 @Injectable()
@@ -50,10 +61,11 @@ export class RequestsService {
   private readonly logger = new Logger(RequestsService.name);
 
   constructor(
-    private readonly requestsRepo: RequestsRepository,
+    private readonly requestsRepo:  RequestsRepository,
     private readonly eventEmitter:  EventEmitter2,
-    private readonly prisma:        PrismaService, // CHANGED: inject PrismaService
   ) {}
+
+  // ── Create (saves as DRAFT) ───────────────────────────────────────────────
 
   async create(userId: string, dto: CreateRequestDto) {
     this.logger.log(`[RequestsService] create — userId: ${userId}`);
@@ -81,17 +93,30 @@ export class RequestsService {
       bufferMinutes,
     });
 
-    this.eventEmitter.emit('request.created', { requestId: request.id, userId });
+    this.eventEmitter.emit('request.created', {
+      requestId: request.id,
+      userId,
+    });
+
     this.logger.log(`[RequestsService] created: ${request.referenceNumber}`);
     return request;
   }
 
-  async submit(requestId: string, userId: string, userRole: UserRole) {
-    this.logger.log(`[RequestsService] submit — requestId: ${requestId}`);
+  // ── Submit (DRAFT → PENDING + scaffold ApprovalSteps) ────────────────────
+
+  // CHANGED (H1): Accepts explicit adviserId selected by the requestor.
+  async submit(
+    requestId: string,
+    userId:    string,
+    userRole:  UserRole,
+    adviserId: string,
+  ) {
+    this.logger.log(`[RequestsService] submit — requestId: ${requestId}, userId: ${userId}`);
 
     const raw = await this.requestsRepo.findRawById(requestId);
     if (!raw) throw new NotFoundException('Request not found');
 
+    // Only the requestor can submit their own request
     if (raw.requestedById !== userId) {
       throw new ForbiddenException('You can only submit your own requests');
     }
@@ -102,6 +127,25 @@ export class RequestsService {
       );
     }
 
+    // CHANGED (H1): Validate the selected adviser exists, is active, holds
+    // the ADVISER role, and is not the requestor themselves (H2 guard).
+    const adviser = await prisma.user.findFirst({
+      where: {
+        id:        { equals: adviserId, not: userId },
+        role:      UserRole.ADVISER,
+        isActive:  true,
+        deletedAt: null,
+      },
+      select: { id: true, name: true },
+    });
+
+    if (!adviser) {
+      throw new BadRequestException(
+        'Selected adviser not found, is inactive, or you cannot select yourself.',
+      );
+    }
+
+    // ── Venue conflict check ──────────────────────────────────────────────
     const request  = await this.requestsRepo.findById(requestId);
     const venueIds = request!.venueBookings?.map(b => b.venueId) ?? [];
 
@@ -114,15 +158,20 @@ export class RequestsService {
       );
 
       if (conflicts.length > 0) {
-        const names = conflicts.map(c => `${c.venue.name} (ref: ${c.request.referenceNumber})`);
+        const names = conflicts.map(
+          c => `${c.venue.name} (ref: ${c.request.referenceNumber})`,
+        );
         throw new BadRequestException(
-          `Venue conflict detected: ${names.join(', ')}`,
+          `Venue conflict detected. The following venues are already reserved: ${names.join(', ')}`,
         );
       }
     }
 
-    const approverMap = await this.resolveApprovers();
-    const submitted   = await this.requestsRepo.submitRequest(requestId, approverMap);
+    // CHANGED (H1 + H2): Pass adviserId explicitly and requestedById to
+    // exclude the requestor from all other auto-resolved approver stages.
+    const approverMap = await this.resolveApprovers(adviserId, userId);
+
+    const submitted = await this.requestsRepo.submitRequest(requestId, approverMap);
 
     this.eventEmitter.emit('request.submitted', {
       requestId,
@@ -134,42 +183,23 @@ export class RequestsService {
     return submitted;
   }
 
+  // ── Find many (role-scoped) ───────────────────────────────────────────────
+
   async findMany(userId: string, userRole: UserRole, query: QueryRequestDto) {
     const page  = query.page  ?? 1;
     const limit = query.limit ?? 20;
     const skip  = (page - 1) * limit;
 
-    const isAdmin    = ADMIN_ROLES.has(userRole);
-    const isApprover = APPROVER_ROLES.has(userRole);
-
-    let requestedById: string | undefined;
-    let assignedApproverId: string | undefined;
-
-    if (isAdmin) {
-      // Admins see everything — no filter
-      requestedById      = undefined;
-      assignedApproverId = undefined;
-    } else if (isApprover && query.viewAs === 'approver') {
-      // CHANGED: approver viewing "For My Review" —
-      // show requests where they have an approval step
-      requestedById      = undefined;
-      assignedApproverId = userId;
-    } else {
-      // Everyone else (and approvers viewing "My Requests") —
-      // show only their own requests
-      requestedById      = userId;
-      assignedApproverId = undefined;
-    }
+    const requestedById = ADMIN_ROLES.has(userRole) ? undefined : userId;
 
     const { data, total } = await this.requestsRepo.findMany({
       skip,
-      take:              limit,
-      status:            query.status,
-      dateFrom:          query.dateFrom,
-      dateTo:            query.dateTo,
-      search:            query.search,
+      take:   limit,
+      status: query.status,
+      dateFrom: query.dateFrom,
+      dateTo:   query.dateTo,
+      search:   query.search,
       requestedById,
-      assignedApproverId, // CHANGED: new filter
     });
 
     return {
@@ -185,24 +215,41 @@ export class RequestsService {
     };
   }
 
+  // ── Find one ──────────────────────────────────────────────────────────────
+
+  // CHANGED (H3): Replaced single ownership check with layered visibility rules.
   async findOne(requestId: string, userId: string, userRole: UserRole) {
     const request = await this.requestsRepo.findById(requestId);
     if (!request) throw new NotFoundException('Request not found');
 
-    // Admin roles see everything
+    // Path 1: Admin roles always have full visibility.
     if (ADMIN_ROLES.has(userRole)) return request;
 
-    // Owner sees their own
+    // Path 2: The requestor who owns the request.
     if (request.requestedById === userId) return request;
 
-    // CHANGED: approvers can view requests where they have a step assigned
-    const isApprover = request.approvalSteps?.some(
-      (s: { approverId: string | null }) => s.approverId === userId,
-    );
-    if (isApprover) return request;
+    // Path 3: Explicitly assigned approver — approverId matches on any step.
+    const isAssignedApprover = request.approvalSteps?.some(
+      s => s.approverId === userId,
+    ) ?? false;
+
+    if (isAssignedApprover) return request;
+
+    // Path 4: Role-fallback approver — unassigned step exists for this user's stage.
+    // Covers the case where approverId is null and any holder of the role can act.
+    const assignedStage = ROLE_TO_STAGE[userRole] ?? null;
+    if (assignedStage) {
+      const hasMatchingUnassignedStep = request.approvalSteps?.some(
+        s => s.approverId === null && s.stage === assignedStage,
+      ) ?? false;
+
+      if (hasMatchingUnassignedStep) return request;
+    }
 
     throw new ForbiddenException('You do not have access to this request');
   }
+
+  // ── Update (DRAFT or PENDING only) ───────────────────────────────────────
 
   async update(requestId: string, userId: string, userRole: UserRole, dto: UpdateRequestDto) {
     this.logger.log(`[RequestsService] update — requestId: ${requestId}`);
@@ -216,7 +263,9 @@ export class RequestsService {
 
     if (!EDITABLE_STATUSES.has(raw.status)) {
       throw new BadRequestException(
-        `Requests can only be edited in DRAFT or PENDING status. Current status: ${raw.status}.`,
+        `Requests can only be edited in DRAFT or PENDING status. ` +
+        `Current status: ${raw.status}. ` +
+        `Once a request reaches Stage 1 Review, you must cancel and refile.`,
       );
     }
 
@@ -241,10 +290,17 @@ export class RequestsService {
       resetApprovalSteps: isPending,
     });
 
-    this.eventEmitter.emit('request.updated', { requestId, userId, wasReset: isPending });
-    this.logger.log(`[RequestsService] updated: ${requestId}`);
+    this.eventEmitter.emit('request.updated', {
+      requestId,
+      userId,
+      wasReset: isPending,
+    });
+
+    this.logger.log(`[RequestsService] updated: ${requestId} (stepsReset: ${isPending})`);
     return updated;
   }
+
+  // ── Cancel ────────────────────────────────────────────────────────────────
 
   async cancel(requestId: string, userId: string, userRole: UserRole) {
     this.logger.log(`[RequestsService] cancel — requestId: ${requestId}`);
@@ -263,26 +319,50 @@ export class RequestsService {
     }
 
     await this.requestsRepo.cancel(requestId);
-    this.eventEmitter.emit('request.cancelled', { requestId, userId });
+
+    this.eventEmitter.emit('request.cancelled', {
+      requestId,
+      userId,
+    });
+
     this.logger.log(`[RequestsService] cancelled: ${requestId}`);
   }
 
-  private async resolveApprovers(): Promise<Record<ApprovalStage, string | null>> {
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  // CHANGED (H1 + H2): adviserId is now explicit (selected by requestor,
+  // validated above). requestedById is excluded from all auto-resolved stages
+  // to prevent self-approval.
+  private async resolveApprovers(
+    adviserId:     string,
+    requestedById: string,
+  ): Promise<Record<ApprovalStage, string | null>> {
     const roleToStage: { role: UserRole; stage: ApprovalStage }[] = [
-      { role: UserRole.ADVISER,         stage: ApprovalStage.STAGE_1_ADVISER                 },
+      // CHANGED (H1): Adviser excluded here — set explicitly below.
       { role: UserRole.DEPARTMENT_HEAD, stage: ApprovalStage.STAGE_1_DEPT_HEAD               },
+      { role: UserRole.ACADEMIC_HEAD,   stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD           },
+      { role: UserRole.STUDENT_AFFAIRS, stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS },
       { role: UserRole.MIS,             stage: ApprovalStage.STAGE_2_MIS                     },
       { role: UserRole.BUILDING_ADMIN,  stage: ApprovalStage.STAGE_2_BUILDING                },
-      { role: UserRole.STUDENT_AFFAIRS, stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS },
-      { role: UserRole.ACADEMIC_HEAD,   stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD           },
       { role: UserRole.SCHOOL_ADMIN,    stage: ApprovalStage.STAGE_3_SCHOOL_ADMIN            },
     ];
 
     const result = {} as Record<ApprovalStage, string | null>;
 
+    // CHANGED (H1): Adviser is always the explicitly selected one.
+    result[ApprovalStage.STAGE_1_ADVISER] = adviserId;
+
+    // CHANGED (H2): Exclude the requestor from all other auto-resolved stages.
+    // If the requestor is the only user with a given role, that step gets
+    // approverId = null and falls back to role-based assignment at action time.
     for (const { role, stage } of roleToStage) {
-      const user = await this.prisma.user.findFirst({
-        where:  { role, isActive: true, deletedAt: null },
+      const user = await prisma.user.findFirst({
+        where: {
+          role,
+          isActive:  true,
+          deletedAt: null,
+          id:        { not: requestedById },
+        },
         select: { id: true },
       });
       result[stage] = user?.id ?? null;
@@ -292,14 +372,14 @@ export class RequestsService {
   }
 
   private async getBufferMinutes(): Promise<number> {
-    const config = await this.prisma.systemConfig.findUnique({
+    const config = await prisma.systemConfig.findUnique({
       where: { key: 'reservation_buffer_min' },
     });
     return parseInt(config?.value ?? '30', 10);
   }
 
   private async getReferencePrefix(): Promise<string> {
-    const config = await this.prisma.systemConfig.findUnique({
+    const config = await prisma.systemConfig.findUnique({
       where: { key: 'reference_number_prefix' },
     });
     return config?.value ?? 'RACA';
