@@ -11,6 +11,7 @@ import {
   RequestStatus,
   ApprovalStatus,
   ApprovalStage,
+  ApprovalGroup,
 } from '@repo/database';
 
 // The full include shape used for single-request queries.
@@ -54,8 +55,6 @@ export class RequestsRepository {
     dateTo?:       string;
     search?:       string;
     requestedById?:      string;
-    // CHANGED: When provided, returns only requests where this user
-    // is an assigned approver on any step — powers the "For My Review" tab.
     assignedApproverId?: string;
   }) {
     const {
@@ -65,9 +64,6 @@ export class RequestsRepository {
 
     const where: Prisma.RequestWhereInput = {
       deletedAt: null,
-      // CHANGED: If assignedApproverId is set, scope to requests where that
-      // user is an approver on any step. Mutually exclusive with requestedById
-      // — the service decides which one to pass based on the active tab.
       ...(assignedApproverId
         ? {
             approvalSteps: {
@@ -177,10 +173,12 @@ export class RequestsRepository {
     venues: { venueId: string }[];
     assets: { assetId: string; quantity: number }[];
     bufferMinutes: number;
+    approvalGroup: ApprovalGroup;
   }) {
     const {
       venues, assets, bufferMinutes,
       activityStartAt, activityEndAt,
+      approvalGroup,
       ...requestData
     } = data;
 
@@ -193,6 +191,7 @@ export class RequestsRepository {
         ...requestData,
         activityStartAt,
         activityEndAt,
+        approvalGroup,
         status: RequestStatus.DRAFT,
         venueBookings: venues.length > 0 ? {
           create: venues.map(v => ({
@@ -308,9 +307,6 @@ export class RequestsRepository {
     });
   }
 
-  // CHANGED: Updated step order per institution's sign-off sequence.
-  // Academic Head (3) and Head of Student Affairs (4) now come before
-  // MIS (5) and Building Administrator (6).
   async submitRequest(id: string, approverMap: Record<ApprovalStage, string | null>) {
     return prisma.$transaction(async (tx) => {
       const steps: { stage: ApprovalStage; stepOrder: number; title: string }[] = [
@@ -363,6 +359,7 @@ export class RequestsRepository {
         id:            true,
         status:        true,
         requestedById: true,
+        approvalGroup: true,
         venueBookings: {
           select: { venueId: true },
         },

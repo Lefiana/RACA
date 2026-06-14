@@ -18,6 +18,7 @@ import {
   RequestStatus,
   UserRole,
   ApprovalStage,
+  ApprovalGroup,
 } from '@repo/database';
 
 import { RequestsRepository }  from '../repositories/requests.repository';
@@ -91,6 +92,7 @@ export class RequestsService {
       venues:               dto.venues ?? [],
       assets:               dto.assets ?? [],
       bufferMinutes,
+      approvalGroup:        dto.approvalGroup,
     });
 
     this.eventEmitter.emit('request.created', {
@@ -104,7 +106,6 @@ export class RequestsService {
 
   // ── Submit (DRAFT → PENDING + scaffold ApprovalSteps) ────────────────────
 
-  // CHANGED (H1): Accepts explicit adviserId selected by the requestor.
   async submit(
     requestId: string,
     userId:    string,
@@ -127,7 +128,7 @@ export class RequestsService {
       );
     }
 
-    // CHANGED (H1): Validate the selected adviser exists, is active, holds
+    // ── Validate the selected adviser exists, is active, holds
     // the ADVISER role, and is not the requestor themselves (H2 guard).
     const adviser = await prisma.user.findFirst({
       where: {
@@ -142,6 +143,25 @@ export class RequestsService {
     if (!adviser) {
       throw new BadRequestException(
         'Selected adviser not found, is inactive, or you cannot select yourself.',
+      );
+    }
+
+    // ── NEW: Department Head must exist for the selected approval group
+    // This is a hard block — the request stays in DRAFT status.
+    const deptHead = await prisma.user.findFirst({
+      where: {
+        role:           UserRole.DEPARTMENT_HEAD,
+        approvalGroup:  raw.approvalGroup,
+        isActive:       true,
+        deletedAt:      null,
+        id:             { not: userId },
+      },
+      select: { id: true, name: true },
+    });
+
+    if (!deptHead) {
+      throw new BadRequestException(
+        'No Department Head is currently assigned to the selected approval group. Please contact an administrator to configure one before submitting.',
       );
     }
 
@@ -167,9 +187,13 @@ export class RequestsService {
       }
     }
 
-    // CHANGED (H1 + H2): Pass adviserId explicitly and requestedById to
-    // exclude the requestor from all other auto-resolved approver stages.
-    const approverMap = await this.resolveApprovers(adviserId, userId);
+    // Pass adviserId explicitly, requestedById to exclude requestor,
+    // and approvalGroup for Department Head routing.
+    const approverMap = await this.resolveApprovers(
+      adviserId,
+      userId,
+      raw.approvalGroup,
+    );
 
     const submitted = await this.requestsRepo.submitRequest(requestId, approverMap);
 
@@ -190,29 +214,16 @@ export class RequestsService {
     const limit = query.limit ?? 20;
     const skip  = (page - 1) * limit;
 
-    // CHANGED: Three scoping modes based on role and query params:
-    //   ADMIN roles          → no scope (see everything)
-    //   APPROVER roles       → scope by assignedApproverId (For My Review tab)
-    //   REQUESTOR + others   → scope by requestedById (My Requests tab)
-    //
-    // The frontend signals which tab is active via query.viewMode:
-    //   'my_requests'   → always use requestedById regardless of role
-    //   'for_my_review' → use assignedApproverId (only meaningful for approvers)
-    //   undefined       → fall back to role-based default
-
     let requestedById:      string | undefined;
     let assignedApproverId: string | undefined;
 
     if (ADMIN_ROLES.has(userRole)) {
       // Admins see everything — no scoping
     } else if (query.viewMode === 'my_requests') {
-      // Explicit "My Requests" tab — show only what this user submitted
       requestedById = userId;
     } else if (query.viewMode === 'for_my_review' && APPROVER_ROLES.has(userRole)) {
-      // Explicit "For My Review" tab — show requests where they're an approver
       assignedApproverId = userId;
     } else {
-      // Default fallback — non-admins see their own requests
       requestedById = userId;
     }
 
@@ -242,7 +253,6 @@ export class RequestsService {
 
   // ── Find one ──────────────────────────────────────────────────────────────
 
-  // CHANGED (H3): Replaced single ownership check with layered visibility rules.
   async findOne(requestId: string, userId: string, userRole: UserRole) {
     const request = await this.requestsRepo.findById(requestId);
     if (!request) throw new NotFoundException('Request not found');
@@ -261,7 +271,6 @@ export class RequestsService {
     if (isAssignedApprover) return request;
 
     // Path 4: Role-fallback approver — unassigned step exists for this user's stage.
-    // Covers the case where approverId is null and any holder of the role can act.
     const assignedStage = ROLE_TO_STAGE[userRole] ?? null;
     if (assignedStage) {
       const hasMatchingUnassignedStep = request.approvalSteps?.some(
@@ -355,16 +364,33 @@ export class RequestsService {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  // CHANGED (H1 + H2): adviserId is now explicit (selected by requestor,
-  // validated above). requestedById is excluded from all auto-resolved stages
-  // to prevent self-approval.
+  // CHANGED: resolveApprovers now matches Department Head by approvalGroup.
+  // All other stages still use role-only matching.
   private async resolveApprovers(
     adviserId:     string,
     requestedById: string,
+    approvalGroup: ApprovalGroup,
   ): Promise<Record<ApprovalStage, string | null>> {
-    const roleToStage: { role: UserRole; stage: ApprovalStage }[] = [
-      // CHANGED (H1): Adviser excluded here — set explicitly below.
-      { role: UserRole.DEPARTMENT_HEAD, stage: ApprovalStage.STAGE_1_DEPT_HEAD               },
+    const result = {} as Record<ApprovalStage, string | null>;
+
+    // Adviser is always the explicitly selected one.
+    result[ApprovalStage.STAGE_1_ADVISER] = adviserId;
+
+    // Department Head: matched by approvalGroup + role, excluded if it's the requestor.
+    const deptHead = await prisma.user.findFirst({
+      where: {
+        role:           UserRole.DEPARTMENT_HEAD,
+        approvalGroup:  approvalGroup,
+        isActive:       true,
+        deletedAt:      null,
+        id:             { not: requestedById },
+      },
+      select: { id: true },
+    });
+    result[ApprovalStage.STAGE_1_DEPT_HEAD] = deptHead?.id ?? null;
+
+    // All other stages: role-only matching, exclude requestor.
+    const remainingStages: { role: UserRole; stage: ApprovalStage }[] = [
       { role: UserRole.ACADEMIC_HEAD,   stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD           },
       { role: UserRole.STUDENT_AFFAIRS, stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS },
       { role: UserRole.MIS,             stage: ApprovalStage.STAGE_2_MIS                     },
@@ -372,15 +398,7 @@ export class RequestsService {
       { role: UserRole.SCHOOL_ADMIN,    stage: ApprovalStage.STAGE_3_SCHOOL_ADMIN            },
     ];
 
-    const result = {} as Record<ApprovalStage, string | null>;
-
-    // CHANGED (H1): Adviser is always the explicitly selected one.
-    result[ApprovalStage.STAGE_1_ADVISER] = adviserId;
-
-    // CHANGED (H2): Exclude the requestor from all other auto-resolved stages.
-    // If the requestor is the only user with a given role, that step gets
-    // approverId = null and falls back to role-based assignment at action time.
-    for (const { role, stage } of roleToStage) {
+    for (const { role, stage } of remainingStages) {
       const user = await prisma.user.findFirst({
         where: {
           role,

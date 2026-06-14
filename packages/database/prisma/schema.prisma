@@ -1,4 +1,4 @@
-// File: apps/api/prisma/schema.prisma
+// File: packages/database/prisma/schema.prisma
 // Purpose: Full database schema — Better Auth owns user/session/account/verification tables.
 //          App-specific fields (role, department, etc.) are extended on top of the Better Auth base.
 //          All domain models reference the Better Auth "user" table via userId.
@@ -40,6 +40,7 @@ enum RequestStatus {
   REJECTED
   CANCELLED
   COMPLETED
+  REVISION_REQUESTED  // ← NEW
 }
 
 enum ApprovalStatus {
@@ -47,6 +48,8 @@ enum ApprovalStatus {
   APPROVED
   REJECTED
   SKIPPED
+  REVISION_REQUESTED  // ← NEW
+  SUSPENDED           // ← NEW
 }
 
 enum ApprovalStage {
@@ -96,6 +99,21 @@ enum CheckoutStatus {
   DAMAGED_ON_RETURN
 }
 
+// ─── NEW ENUMS ─────────────────────────────────────────────────────────────
+enum ApprovalGroup {
+  IT_CPE
+  ART_SCIENCE
+  THM_BM
+  ASST_PRINCIPAL
+  GEN_ED
+}
+
+enum RevisionType {
+  REVISION_RESUME
+  REVISION_RESTART
+}
+// ─────────────────────────────────────────────
+
 enum NotificationType {
   REQUEST_SUBMITTED
   REQUEST_APPROVED
@@ -108,26 +126,17 @@ enum NotificationType {
   ASSET_DUE
   ASSET_OVERDUE
   SYSTEM
+  REVISION_REQUESTED  // ← NEW
 }
 
 // ─────────────────────────────────────────────
 // BETTER AUTH CORE TABLES
-// These four models (User, Session, Account, Verification) are
-// owned and written by Better Auth via the Prisma adapter.
-//
-// IMPORTANT RULES:
-// 1. Table names must be lowercase (@@map("user") not "users")
-//    — Better Auth expects exactly these table names.
-// 2. Do not remove or rename Better Auth's required fields.
-// 3. App-specific fields are safe to add on top.
-// 4. Better Auth manages password hashing inside the Account model —
-//    you never call bcrypt directly.
 // ─────────────────────────────────────────────
 
 model User {
   // ── Required by Better Auth ───────────────────
   id            String   @id @default(cuid())
-  name          String   // Better Auth calls this "name" — maps to displayName in our UI
+  name          String
   email         String   @unique
   emailVerified Boolean  @default(false)
   image         String?
@@ -135,15 +144,15 @@ model User {
   updatedAt     DateTime @updatedAt
 
   // ── App-specific extensions ───────────────────
-  // Better Auth ignores these fields; our app reads them.
-  // After a user signs up via Better Auth, a post-hook
-  // sets role = REQUESTOR and isActive = true.
   username    String?   @unique
   role        UserRole  @default(REQUESTOR)
   department  String?
   isActive    Boolean   @default(true)
   lastLoginAt DateTime?
-  deletedAt   DateTime? // soft delete — never hard delete users
+  deletedAt   DateTime?
+
+  // ── NEW: Approval Group for Department Head routing ───────────────────
+  approvalGroup ApprovalGroup?
 
   // ── Better Auth relations ─────────────────────
   sessions Session[]
@@ -159,11 +168,10 @@ model User {
 
   @@index([role])
   @@index([deletedAt])
-  @@map("user") // ← Better Auth requires this exact table name
+  @@index([approvalGroup])  // ← NEW
+  @@map("user")
 }
 
-// Better Auth writes sessions here on every sign-in.
-// Session validation on each request reads from this table.
 model Session {
   id        String   @id @default(cuid())
   expiresAt DateTime
@@ -176,12 +184,9 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@map("session") // ← Better Auth requires this exact table name
+  @@map("session")
 }
 
-// Better Auth stores provider credentials here.
-// Local accounts:    providerId = "credential", password = bcrypt hash (managed by Better Auth)
-// Microsoft accounts: providerId = "microsoft", tokens stored here
 model Account {
   id                    String    @id @default(cuid())
   accountId             String
@@ -194,15 +199,14 @@ model Account {
   accessTokenExpiresAt  DateTime?
   refreshTokenExpiresAt DateTime?
   scope                 String?
-  password              String?   // bcrypt hash — written by Better Auth, never touched by our code
+  password              String?
   createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  updatedAt             DateTime @updatedAt
 
   @@unique([providerId, accountId])
-  @@map("account") // ← Better Auth requires this exact table name
+  @@map("account")
 }
 
-// Better Auth uses this for email verification tokens, password reset links, etc.
 model Verification {
   id         String   @id @default(cuid())
   identifier String
@@ -212,13 +216,11 @@ model Verification {
   updatedAt  DateTime @updatedAt
 
   @@unique([identifier, value])
-  @@map("verification") // ← Better Auth requires this exact table name
+  @@map("verification")
 }
 
 // ─────────────────────────────────────────────
 // SYSTEM CONFIG
-// Admin-managed key-value store for institutional settings.
-// No config value is ever hardcoded in application code.
 // ─────────────────────────────────────────────
 
 model SystemConfig {
@@ -239,7 +241,7 @@ model SystemConfig {
 
 model Request {
   id              String        @id @default(cuid())
-  referenceNumber String        @unique // e.g. RACA-20250515-1042
+  referenceNumber String        @unique
   requestedById   String
 
   // Section I
@@ -253,12 +255,11 @@ model Request {
   activityStartAt DateTime
   activityEndAt   DateTime
 
-  // Section IV — free text at submission time
-  // Formal assignment happens via VenueBooking and AssetCheckout relations
+  // Section IV
   venueDescription     String?
   equipmentDescription String?
 
-  // Section V — JSON array [{ name, position, organization }]
+  // Section V
   speakers Json @default("[]")
 
   // Section VI
@@ -273,6 +274,12 @@ model Request {
   updatedAt   DateTime      @updatedAt
   deletedAt   DateTime?
 
+  // ── NEW: Approval Group + Revision tracking ───────────────────
+  approvalGroup  ApprovalGroup?
+  revisionCount  Int            @default(0)
+  revisedAt      DateTime?
+  previousStatus RequestStatus?
+
   requestedBy    User            @relation("RequestedBy", fields: [requestedById], references: [id])
   venueBookings  VenueBooking[]
   assetCheckouts AssetCheckout[]
@@ -286,6 +293,7 @@ model Request {
   @@index([activityStartAt])
   @@index([referenceNumber])
   @@index([deletedAt])
+  @@index([approvalGroup])  // ← NEW
   @@map("requests")
 }
 
@@ -299,11 +307,9 @@ model ApprovalStep {
   stage     ApprovalStage
   stepOrder Int
 
-  // Live reference — who is assigned to approve this step
   approverId String?
   approver   User?   @relation("ApproverSteps", fields: [approverId], references: [id])
 
-  // Snapshot written at decision time — immutable after signing
   approverName  String?
   approverRole  String?
   approverTitle String?
@@ -313,6 +319,9 @@ model ApprovalStep {
   rejectionReason String?
   decidedAt       DateTime?
 
+  // ── NEW: Revision type tracking ───────────────────
+  revisionType RevisionType?
+
   attachments Attachment[]
 
   createdAt DateTime @default(now())
@@ -320,7 +329,7 @@ model ApprovalStep {
 
   request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
-  @@unique([requestId, stage]) // database-level constraint: one step per stage per request
+  @@unique([requestId, stage])
   @@index([requestId])
   @@index([approverId])
   @@index([status])
@@ -359,9 +368,9 @@ model VenueBooking {
   venueId       String
   startAt       DateTime
   endAt         DateTime
-  bufferStartAt DateTime  // startAt minus buffer (from SystemConfig)
-  bufferEndAt   DateTime  // endAt plus buffer (from SystemConfig)
-  isLocked      Boolean   @default(false) // true during approval, prevents double-booking
+  bufferStartAt DateTime
+  bufferEndAt   DateTime
+  isLocked      Boolean   @default(false)
   confirmedAt   DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -389,7 +398,7 @@ model Asset {
   model         String?
   status        AssetStatus    @default(AVAILABLE)
   condition     AssetCondition @default(GOOD)
-  custodianRole  AssetCustodian @default(MIS)   
+  custodianRole  AssetCustodian @default(MIS)
   location      String?
   qrCode        String?
   purchasedAt   DateTime?
@@ -497,11 +506,11 @@ model Notification {
   id        String           @id @default(cuid())
   userId    String
   requestId String?
-  stepId    String?          // ADDED: links to a specific approval step when relevant
+  stepId    String?
   type      NotificationType
   title     String
   body      String
-  metadata  Json             @default("{}") // ADDED: extra context (stage, reason, etc.)
+  metadata  Json             @default("{}")
   isRead    Boolean          @default(false)
   readAt    DateTime?
   createdAt DateTime         @default(now())
@@ -515,17 +524,17 @@ model Notification {
 }
 
 // ─────────────────────────────────────────────
-// AUDIT LOGS — append-only, never updated or deleted
+// AUDIT LOGS
 // ─────────────────────────────────────────────
 
 model AuditLog {
   id            String   @id @default(cuid())
   performedById String?
   requestId     String?
-  action        String   // e.g. "REQUEST_SUBMITTED", "STEP_APPROVED", "ASSET_CHECKED_OUT"
-  entity        String   // e.g. "Request", "ApprovalStep", "Asset"
+  action        String
+  entity        String
   entityId      String?
-  snapshot      Json?    // state at the time of action
+  snapshot      Json?
   ipAddress     String?
   userAgent     String?
   createdAt     DateTime @default(now())

@@ -2,7 +2,7 @@
 // CHANGED: inject PrismaService
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma.service';
-import { Prisma, UserRole } from '@repo/database';
+import { Prisma, UserRole, ApprovalGroup } from '@repo/database';
 
 @Injectable()
 export class UsersRepository {
@@ -40,6 +40,7 @@ export class UsersRepository {
         select: {
           id: true, name: true, email: true, username: true,
           role: true, department: true, isActive: true,
+          approvalGroup: true,
           lastLoginAt: true, createdAt: true, updatedAt: true, image: true,
         },
       }),
@@ -49,11 +50,36 @@ export class UsersRepository {
     return { data, total };
   }
 
-  async updateRole(id: string, role: UserRole) {
+  // ── NEW: Check if another active Department Head already holds this approvalGroup ─
+  async hasActiveDepartmentHeadForGroup(
+    approvalGroup: ApprovalGroup,
+    excludeUserId?: string,
+  ): Promise<boolean> {
+    const count = await this.prisma.user.count({
+      where: {
+        role:           UserRole.DEPARTMENT_HEAD,
+        approvalGroup:  approvalGroup,
+        isActive:       true,
+        deletedAt:      null,
+        ...(excludeUserId && { id: { not: excludeUserId } }),
+      },
+    });
+    return count > 0;
+  }
+
+  // CHANGED: Now accepts optional approvalGroup
+  async updateRole(id: string, role: UserRole, approvalGroup?: ApprovalGroup) {
     return this.prisma.user.update({
       where: { id },
-      data:  { role },
-      select: { id: true, name: true, email: true, username: true, role: true, department: true, isActive: true, updatedAt: true },
+      data:  {
+        role,
+        ...(approvalGroup !== undefined && { approvalGroup }),
+      },
+      select: {
+        id: true, name: true, email: true, username: true,
+        role: true, approvalGroup: true, department: true,
+        isActive: true, updatedAt: true,
+      },
     });
   }
 

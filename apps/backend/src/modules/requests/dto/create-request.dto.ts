@@ -8,6 +8,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
+  IsEnum,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -18,6 +19,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApprovalGroup } from '@repo/database';
 
 // ── Nested DTO: Speaker entry ─────────────────────────────────────────────────
 
@@ -154,4 +156,14 @@ export class CreateRequestDto {
   @IsString()
   @MaxLength(1000)
   remarks?: string;
+
+  // ── NEW: Approval Group ─────────────────────────────────────────────────────
+  @ApiProperty({
+    enum: ApprovalGroup,
+    example: 'IT_CPE',
+    description: 'The approval group that determines Department Head routing.',
+  })
+  @IsEnum(ApprovalGroup, { message: 'approvalGroup must be a valid ApprovalGroup' })
+  @IsNotEmpty()
+  approvalGroup: ApprovalGroup;
 }

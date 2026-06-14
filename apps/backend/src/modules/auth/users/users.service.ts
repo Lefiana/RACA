@@ -1,15 +1,16 @@
-// File: apps/api/src/modules/auth/users/users.service.ts
+// File: apps/backend/src/modules/auth/users/users.service.ts
 // Purpose: Business logic for app-specific user management.
 //          Better Auth owns signup/login/session — this service owns
 //          everything after: role assignment, listing, deactivation, soft delete.
 // Dependencies: UsersRepository, @nestjs/common, @raca/database
 
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { UserRole } from '@repo/database';
+import { UserRole, ApprovalGroup } from '@repo/database';
 import { UsersRepository } from './users.repository';
 
 // IPaginationMeta — shared pagination shape used by every list endpoint
@@ -63,13 +64,48 @@ export class UsersService {
     };
   }
 
-  async updateRole(id: string, role: UserRole) {
+  // CHANGED: Now accepts optional approvalGroup and validates uniqueness
+  // for DEPARTMENT_HEAD assignments.
+  async updateRole(id: string, role: UserRole, approvalGroup?: ApprovalGroup) {
     // Verify user exists first
     const user = await this.usersRepo.findById(id);
     if (!user) throw new NotFoundException(`User ${id} not found`);
 
-    const updated = await this.usersRepo.updateRole(id, role);
-    this.logger.log(`[UsersService] user ${id} role updated → ${role}`);
+    // ── NEW: Validate approvalGroup for DEPARTMENT_HEAD ─────────────────────
+    if (role === UserRole.DEPARTMENT_HEAD) {
+      if (!approvalGroup) {
+        throw new BadRequestException(
+          'approvalGroup is required when assigning the DEPARTMENT_HEAD role.',
+        );
+      }
+
+      const hasConflict = await this.usersRepo.hasActiveDepartmentHeadForGroup(
+        approvalGroup,
+        id, // exclude the current user being updated
+      );
+
+      if (hasConflict) {
+        throw new BadRequestException(
+          `Another active Department Head is already assigned to the ${approvalGroup} approval group.`,
+        );
+      }
+    }
+
+    // If role is NOT DEPARTMENT_HEAD but approvalGroup was passed, clear it
+    const effectiveApprovalGroup = role === UserRole.DEPARTMENT_HEAD
+      ? approvalGroup
+      : null;
+
+    const updated = await this.usersRepo.updateRole(
+      id,
+      role,
+      effectiveApprovalGroup ?? undefined,
+    );
+
+    this.logger.log(
+      `[UsersService] user ${id} role updated → ${role}` +
+      (effectiveApprovalGroup ? ` (group: ${effectiveApprovalGroup})` : ''),
+    );
     return updated;
   }
 
