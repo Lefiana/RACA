@@ -63,8 +63,11 @@ export class QueryRequestDto {
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ enum: ['owner', 'approver'] })
+  // CHANGED: Controls which scoping mode the list uses.
+  // 'my_requests'   — requests submitted by the current user
+  // 'for_my_review' — requests where the current user is an assigned approver
+  @ApiPropertyOptional({ enum: ['my_requests', 'for_my_review'], example: 'for_my_review' })
   @IsOptional()
-  @IsEnum(['owner', 'approver'])
-  viewAs?: 'owner' | 'approver';
+  @IsString()
+  viewMode?: 'my_requests' | 'for_my_review';
 }

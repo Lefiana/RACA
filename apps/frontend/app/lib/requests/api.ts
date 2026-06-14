@@ -1,18 +1,23 @@
 // File: apps/frontend/lib/requests/api.ts
-// Purpose: Request lifecycle API calls.
-// Dependencies: apiClient, requests/types
+// Purpose: All HTTP calls for the request lifecycle.
+// Dependencies: apiClient (../axios), types
 
 import { apiClient } from '../axios';
 import type {
   IRequest,
-  IRequestsQuery,
-  IRequestsResponse,
   ICreateRequestDto,
   IUpdateRequestDto,
+  ISubmitRequestDto,
+  IGetRequestsParams,
+  IRequestsResponse,
 } from './types';
 
-export async function getRequests(query?: IRequestsQuery): Promise<IRequestsResponse> {
-  const res = await apiClient.get<IRequestsResponse>('/requests', { params: query });
+export async function getRequests(
+  params: IGetRequestsParams = {},
+): Promise<IRequestsResponse> {
+  const res = await apiClient.get<IRequestsResponse>('/requests', {
+    params,
+  });
   return res.data;
 }
 
@@ -26,16 +31,20 @@ export async function createRequest(dto: ICreateRequestDto): Promise<IRequest> {
   return res.data;
 }
 
-export async function updateRequest(id: string, dto: IUpdateRequestDto): Promise<IRequest> {
+export async function updateRequest(
+  id:  string,
+  dto: IUpdateRequestDto,
+): Promise<IRequest> {
   const res = await apiClient.patch<IRequest>(`/requests/${id}`, dto);
   return res.data;
 }
 
+// CHANGED: Accepts adviserId wrapped in ISubmitRequestDto body per updated layout requirements
 export async function submitRequest(
-  id:        string,
-  adviserId: string,
+  id:  string,
+  dto: ISubmitRequestDto,
 ): Promise<IRequest> {
-  const res = await apiClient.post<IRequest>(`/requests/${id}/submit`, { adviserId });
+  const res = await apiClient.post<IRequest>(`/requests/${id}/submit`, dto);
   return res.data;
 }
 

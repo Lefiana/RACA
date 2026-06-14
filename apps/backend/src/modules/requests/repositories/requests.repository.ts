@@ -47,26 +47,44 @@ export class RequestsRepository {
   }
 
   async findMany(params: {
-    skip:         number;
-    take:         number;
-    status?:      RequestStatus;
-    dateFrom?:    string;
-    dateTo?:      string;
-    search?:      string;
-    requestedById?: string;
+    skip:          number;
+    take:          number;
+    status?:       RequestStatus;
+    dateFrom?:     string;
+    dateTo?:       string;
+    search?:       string;
+    requestedById?:      string;
+    // CHANGED: When provided, returns only requests where this user
+    // is an assigned approver on any step — powers the "For My Review" tab.
+    assignedApproverId?: string;
   }) {
-    const { skip, take, status, dateFrom, dateTo, search, requestedById } = params;
+    const {
+      skip, take, status, dateFrom, dateTo,
+      search, requestedById, assignedApproverId,
+    } = params;
 
     const where: Prisma.RequestWhereInput = {
       deletedAt: null,
-      ...(requestedById && { requestedById }),
-      ...(status         && { status }),
-      ...(dateFrom || dateTo) && {
+      // CHANGED: If assignedApproverId is set, scope to requests where that
+      // user is an approver on any step. Mutually exclusive with requestedById
+      // — the service decides which one to pass based on the active tab.
+      ...(assignedApproverId
+        ? {
+            approvalSteps: {
+              some: { approverId: assignedApproverId },
+            },
+          }
+        : requestedById
+          ? { requestedById }
+          : {}
+      ),
+      ...(status && { status }),
+      ...((dateFrom || dateTo) && {
         activityStartAt: {
           ...(dateFrom && { gte: new Date(dateFrom) }),
           ...(dateTo   && { lte: new Date(dateTo)   }),
         },
-      },
+      }),
       ...(search && {
         OR: [
           { activityTitle:   { contains: search, mode: 'insensitive' } },

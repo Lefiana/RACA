@@ -190,7 +190,31 @@ export class RequestsService {
     const limit = query.limit ?? 20;
     const skip  = (page - 1) * limit;
 
-    const requestedById = ADMIN_ROLES.has(userRole) ? undefined : userId;
+    // CHANGED: Three scoping modes based on role and query params:
+    //   ADMIN roles          → no scope (see everything)
+    //   APPROVER roles       → scope by assignedApproverId (For My Review tab)
+    //   REQUESTOR + others   → scope by requestedById (My Requests tab)
+    //
+    // The frontend signals which tab is active via query.viewMode:
+    //   'my_requests'   → always use requestedById regardless of role
+    //   'for_my_review' → use assignedApproverId (only meaningful for approvers)
+    //   undefined       → fall back to role-based default
+
+    let requestedById:      string | undefined;
+    let assignedApproverId: string | undefined;
+
+    if (ADMIN_ROLES.has(userRole)) {
+      // Admins see everything — no scoping
+    } else if (query.viewMode === 'my_requests') {
+      // Explicit "My Requests" tab — show only what this user submitted
+      requestedById = userId;
+    } else if (query.viewMode === 'for_my_review' && APPROVER_ROLES.has(userRole)) {
+      // Explicit "For My Review" tab — show requests where they're an approver
+      assignedApproverId = userId;
+    } else {
+      // Default fallback — non-admins see their own requests
+      requestedById = userId;
+    }
 
     const { data, total } = await this.requestsRepo.findMany({
       skip,
@@ -200,6 +224,7 @@ export class RequestsService {
       dateTo:   query.dateTo,
       search:   query.search,
       requestedById,
+      assignedApproverId,
     });
 
     return {
