@@ -1,4 +1,4 @@
-// File: apps/frontend/lib/requests/api.ts
+// File: apps/frontend/app/lib/requests/api.ts
 // Purpose: All HTTP calls for the request lifecycle.
 // Dependencies: apiClient (../axios), types
 
@@ -8,6 +8,7 @@ import type {
   ICreateRequestDto,
   IUpdateRequestDto,
   ISubmitRequestDto,
+  IResubmitRequestDto,  // ← NEW
   IGetRequestsParams,
   IRequestsResponse,
 } from './types';
@@ -39,12 +40,20 @@ export async function updateRequest(
   return res.data;
 }
 
-// CHANGED: Accepts adviserId wrapped in ISubmitRequestDto body per updated layout requirements
 export async function submitRequest(
   id:  string,
   dto: ISubmitRequestDto,
 ): Promise<IRequest> {
   const res = await apiClient.post<IRequest>(`/requests/${id}/submit`, dto);
+  return res.data;
+}
+
+// ── NEW: Resubmit request after revision ────────────────────────────────────
+export async function resubmitRequest(
+  id:  string,
+  dto: IResubmitRequestDto = {},
+): Promise<IRequest> {
+  const res = await apiClient.post<IRequest>(`/requests/${id}/resubmit`, dto);
   return res.data;
 }
 

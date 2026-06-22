@@ -15,7 +15,6 @@ import {
 } from '@repo/database';
 
 // The full include shape used for single-request queries.
-// Defined once here so the service and controller get consistent data.
 const REQUEST_FULL_INCLUDE = {
   requestedBy: {
     select: {
@@ -342,6 +341,110 @@ export class RequestsRepository {
     });
   }
 
+  // ── NEW: Resubmit — REVISION_RESUME (resume from where revision was requested) ─
+  async resubmitResume(id: string) {
+    return prisma.$transaction(async (tx) => {
+      // Reset the triggering step (REVISION_REQUESTED → PENDING)
+      await tx.approvalStep.updateMany({
+        where: {
+          requestId: id,
+          status: ApprovalStatus.REVISION_REQUESTED,
+        },
+        data: {
+          status:        ApprovalStatus.PENDING,
+          revisionType:  null,
+          decidedAt:     null,
+          remarks:       null,
+          approverName:  null,
+          approverRole:  null,
+          approverTitle: null,
+        },
+      });
+
+      // Reset all SUSPENDED steps back to PENDING
+      await tx.approvalStep.updateMany({
+        where: {
+          requestId: id,
+          status: ApprovalStatus.SUSPENDED,
+        },
+        data: {
+          status:        ApprovalStatus.PENDING,
+          revisionType:  null,
+          decidedAt:     null,
+          remarks:       null,
+          approverName:  null,
+          approverRole:  null,
+          approverTitle: null,
+        },
+      });
+
+      // Restore request to previous status
+      const request = await tx.request.findUnique({
+        where: { id },
+        select: { previousStatus: true },
+      });
+
+      return tx.request.update({
+        where: { id },
+        data: {
+          status:         request?.previousStatus ?? RequestStatus.PENDING,
+          previousStatus: null,
+        },
+        include: REQUEST_FULL_INCLUDE,
+      });
+    });
+  }
+
+  // ── NEW: Resubmit — REVISION_RESTART (full restart, keep adviser if still eligible) ─
+  async resubmitRestart(
+    id: string,
+    approverMap: Record<ApprovalStage, string | null>,
+  ) {
+    return prisma.$transaction(async (tx) => {
+      // Delete all existing steps
+      await tx.approvalStep.deleteMany({ where: { requestId: id } });
+
+      // Scaffold 7 new steps
+      const steps: { stage: ApprovalStage; stepOrder: number; title: string }[] = [
+        { stage: ApprovalStage.STAGE_1_ADVISER,                  stepOrder: 1, title: 'Adviser'                  },
+        { stage: ApprovalStage.STAGE_1_DEPT_HEAD,                stepOrder: 2, title: 'Department Head'          },
+        { stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD,            stepOrder: 3, title: 'Academic Head'            },
+        { stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS,  stepOrder: 4, title: 'Head of Student Affairs'  },
+        { stage: ApprovalStage.STAGE_2_MIS,                      stepOrder: 5, title: 'MIS'                      },
+        { stage: ApprovalStage.STAGE_2_BUILDING,                 stepOrder: 6, title: 'Building Administrator'   },
+        { stage: ApprovalStage.STAGE_3_SCHOOL_ADMIN,             stepOrder: 7, title: 'School Administrator'     },
+      ];
+
+      await tx.approvalStep.createMany({
+        data: steps.map(step => ({
+          requestId:     id,
+          stage:         step.stage,
+          stepOrder:     step.stepOrder,
+          approverTitle: step.title,
+          approverId:    approverMap[step.stage] ?? null,
+          status:        ApprovalStatus.PENDING,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Unlock venues (will be re-locked when Dept Head approves again)
+      await tx.venueBooking.updateMany({
+        where: { requestId: id },
+        data:  { isLocked: false },
+      });
+
+      return tx.request.update({
+        where: { id },
+        data: {
+          status:         RequestStatus.PENDING,
+          previousStatus: null,
+          revisedAt:      new Date(),
+        },
+        include: REQUEST_FULL_INCLUDE,
+      });
+    });
+  }
+
   async cancel(id: string) {
     return prisma.request.update({
       where: { id },
@@ -362,6 +465,19 @@ export class RequestsRepository {
         approvalGroup: true,
         venueBookings: {
           select: { venueId: true },
+        },
+      },
+    });
+  }
+
+  // ── NEW: Find request with full revision context for resubmit ───────────────
+  async findForResubmit(id: string) {
+    return prisma.request.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        ...REQUEST_FULL_INCLUDE,
+        approvalSteps: {
+          orderBy: { stepOrder: 'asc' },
         },
       },
     });

@@ -30,9 +30,6 @@ import { CreateRequestDto }  from '../dto/create-request.dto';
 import { UpdateRequestDto, QueryRequestDto } from '../dto/query-update.dto';
 import { SubmitRequestDto }  from '../dto/submit-request.dto';
 
-// UserRole is read from session.user — the Better Auth additionalFields
-// make role available on the session user object directly.
-
 @ApiTags('Requests')
 @ApiBearerAuth()
 @Controller('requests')
@@ -40,8 +37,6 @@ export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 
   // POST /api/v1/requests
-  // Creates a new request as DRAFT.
-  // Any authenticated user can create a request.
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new RACA request (saved as DRAFT)' })
@@ -53,8 +48,6 @@ export class RequestsController {
   }
 
   // POST /api/v1/requests/:id/submit
-  // Transitions a DRAFT request to PENDING and scaffolds approval steps.
-  // Performs venue conflict check before accepting.
   @Post(':id/submit')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Submit a DRAFT request for approval (adviserId required)' })
@@ -72,10 +65,6 @@ export class RequestsController {
   }
 
   // GET /api/v1/requests
-  // Paginated list. Scope depends on role:
-  //   REQUESTOR       → own requests only
-  //   ADMIN roles     → all requests
-  //   APPROVER roles  → own requests (approver view added in Approvals module)
   @Get()
   @ApiOperation({ summary: 'List requests (scoped by role)' })
   async findAll(
@@ -104,8 +93,6 @@ export class RequestsController {
   }
 
   // PATCH /api/v1/requests/:id
-  // Edit a DRAFT or PENDING request.
-  // Editing a PENDING request resets all approval steps.
   @Patch(':id')
   @ApiOperation({ summary: 'Edit a DRAFT or PENDING request' })
   async update(
@@ -121,8 +108,21 @@ export class RequestsController {
     );
   }
 
+  // ── NEW: POST /api/v1/requests/:id/resubmit ────────────────────────────────
+  @Post(':id/resubmit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resubmit a request after revision (REVISION_REQUESTED → previous status)' })
+  async resubmit(
+    @Session()    session: UserSession,
+    @Param('id')  id:      string,
+  ) {
+    return this.requestsService.resubmit(
+      id,
+      session.user.id,
+    );
+  }
+
   // DELETE /api/v1/requests/:id
-  // Cancels a DRAFT or PENDING request (soft delete).
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Cancel a DRAFT or PENDING request' })

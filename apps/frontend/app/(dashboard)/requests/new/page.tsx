@@ -1,24 +1,27 @@
 // File: apps/frontend/app/(dashboard)/requests/new/page.tsx
-// Purpose: Multi-section RACA request creation form with adviser selection
+// Purpose: Multi-section RACA request creation form with adviser + approval group selection
 // Dependencies: useCreateRequest, useSubmitRequest, useAdvisers, useRouter
 'use client';
 
 import { useState }          from 'react';
 import { useRouter }         from 'next/navigation';
 import { useCreateRequest, useSubmitRequest } from '../../../lib/requests/hooks';
-import { useAdvisers }       from '../../../lib/users/hooks'; // CHANGED: Import useAdvisers
-import type { ICreateRequestDto, ISpeaker } from '../../../lib/requests/types';
+import { useAdvisers }       from '../../../lib/users/hooks';
+import { APPROVAL_GROUP_OPTIONS } from '../../../lib/requests/constants';
+import type { ICreateRequestDto, ISpeaker, ApprovalGroup } from '../../../lib/requests/types';
 
 export default function NewRequestPage() {
   const router        = useRouter();
   const createRequest = useCreateRequest();
   const submitRequest = useSubmitRequest();
-  const { data: advisersData, isLoading: advisersLoading } = useAdvisers(); // CHANGED: Fetch advisers
+  const { data: advisersData, isLoading: advisersLoading } = useAdvisers();
 
-  // CHANGED: Track selected adviser separately — it's only needed at submit time,
-  // not part of the saved DRAFT payload.
   const [selectedAdviserId, setSelectedAdviserId] = useState<string>('');
   const [adviserError, setAdviserError]           = useState<string>('');
+
+  // ── NEW: Approval group selection ────────────────────────────────────────
+  const [selectedApprovalGroup, setSelectedApprovalGroup] = useState<ApprovalGroup | ''>('');
+  const [approvalGroupError, setApprovalGroupError]       = useState<string>('');
 
   const [form, setForm] = useState<ICreateRequestDto>({
     activityTitle:   '',
@@ -34,12 +37,13 @@ export default function NewRequestPage() {
     speakers:        [],
     venues:          [],
     assets:          [],
+    approvalGroup:   '' as ApprovalGroup, // Will be set on submit
   });
 
   const [speakers, setSpeakers] = useState<ISpeaker[]>([]);
 
   const set = (field: keyof ICreateRequestDto) =>
-    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
       setForm(prev => ({ ...prev, [field]: e.target.value }));
 
   const addSpeaker = () =>
@@ -52,7 +56,13 @@ export default function NewRequestPage() {
     setSpeakers(prev => prev.filter((_, idx) => idx !== i));
 
   const handleSave = async (andSubmit = false) => {
-    // CHANGED: Validate adviser is selected before submitting.
+    // ── NEW: Validate approval group is selected ───────────────────────────
+    if (andSubmit && !selectedApprovalGroup) {
+      setApprovalGroupError('Please select an approval group before submitting.');
+      return;
+    }
+    setApprovalGroupError('');
+
     if (andSubmit && !selectedAdviserId) {
       setAdviserError('Please select an adviser before submitting.');
       return;
@@ -65,12 +75,12 @@ export default function NewRequestPage() {
       expectedHeadcount: form.expectedHeadcount
         ? Number(form.expectedHeadcount)
         : undefined,
+      approvalGroup: selectedApprovalGroup as ApprovalGroup,
     };
 
     const request = await createRequest.mutateAsync(dto);
 
     if (andSubmit) {
-      // CHANGED: Pass object with id and adviserId matching operational hook structure
       await submitRequest.mutateAsync({ id: request.id, adviserId: selectedAdviserId });
     }
 
@@ -90,12 +100,48 @@ export default function NewRequestPage() {
         </p>
       </div>
 
-      {/* CHANGED: Adviser selection — required before submission, shown prominently
-          at the top so the requestor picks their adviser first. */}
+      {/* ── NEW: Approval Group selection ───────────────────────────────────── */}
       <section className="bg-card border border-border rounded-lg p-6 space-y-4">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+        <label htmlFor="approval-group-select" className="block text-sm font-semibold text-foreground uppercase tracking-wide">
+          Select Approval Group
+        </label>
+        <p className="text-sm text-muted-foreground">
+          Choose the department group that will route this request to the correct Department Head.
+        </p>
+
+        <select
+          id="approval-group-select"
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          value={selectedApprovalGroup}
+          onChange={e => {
+            setSelectedApprovalGroup(e.target.value as ApprovalGroup);
+            setApprovalGroupError('');
+          }}
+        >
+          <option value="">— Select an approval group —</option>
+          {APPROVAL_GROUP_OPTIONS.map(group => (
+            <option key={group.value} value={group.value}>
+              {group.label}
+            </option>
+          ))}
+        </select>
+
+        {approvalGroupError && (
+          <p className="text-sm text-destructive font-medium">{approvalGroupError}</p>
+        )}
+
+        {selectedApprovalGroup && (
+          <p className="text-xs text-muted-foreground">
+            {APPROVAL_GROUP_OPTIONS.find(g => g.value === selectedApprovalGroup)?.description}
+          </p>
+        )}
+      </section>
+
+      {/* Adviser selection */}
+      <section className="bg-card border border-border rounded-lg p-6 space-y-4">
+        <label htmlFor="adviser-select" className="block text-sm font-semibold text-foreground uppercase tracking-wide">
           Select Your Adviser
-        </h2>
+        </label>
         <p className="text-sm text-muted-foreground">
           Choose the faculty adviser who will review this request first.
         </p>
@@ -104,6 +150,7 @@ export default function NewRequestPage() {
           <p className="text-sm text-muted-foreground">Loading advisers...</p>
         ) : (
           <select
+            id="adviser-select"
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             value={selectedAdviserId}
             onChange={e => {
@@ -176,36 +223,38 @@ export default function NewRequestPage() {
         </div>
       </section>
 
-      {/* Section III — Schedule */}
-      <section className="bg-card border border-border rounded-lg p-6 space-y-4">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">
-          Section III — Schedule
-        </h2>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              Start Date & Time <span className="text-destructive">*</span>
-            </label>
-            <input
-              type="datetime-local"
-              value={form.activityStartAt}
-              onChange={set('activityStartAt')}
-              className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              End Date & Time <span className="text-destructive">*</span>
-            </label>
-            <input
-              type="datetime-local"
-              value={form.activityEndAt}
-              onChange={set('activityEndAt')}
-              className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
+    {/* Section III — Schedule */}
+    <section className="bg-card border border-border rounded-lg p-6 space-y-4">
+      <h2 className="text-sm font-semibold text-foreground uppercase tracking-wide">
+        Section III — Schedule
+      </h2>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <label htmlFor="start-date-time" className="block text-sm font-medium text-foreground">
+            Start Date & Time <span className="text-destructive">*</span>
+          </label>
+          <input
+            id="start-date-time"
+            type="datetime-local"
+            value={form.activityStartAt}
+            onChange={set('activityStartAt')}
+            className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
         </div>
-      </section>
+        <div className="space-y-2">
+          <label htmlFor="end-date-time" className="block text-sm font-medium text-foreground">
+            End Date & Time <span className="text-destructive">*</span>
+          </label>
+          <input
+            id="end-date-time"
+            type="datetime-local"
+            value={form.activityEndAt}
+            onChange={set('activityEndAt')}
+            className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+      </div>
+    </section>
 
       {/* Section IV — Venue & Equipment */}
       <section className="bg-card border border-border rounded-lg p-6 space-y-4">
@@ -362,7 +411,7 @@ export default function NewRequestPage() {
         <button
           type="button"
           onClick={() => handleSave(true)}
-          disabled={isLoading || isFormInvalid || !selectedAdviserId}
+          disabled={isLoading || isFormInvalid || !selectedAdviserId || !selectedApprovalGroup}
           className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
         >
           {isLoading ? 'Submitting...' : 'Save & Submit'}

@@ -19,6 +19,8 @@ import {
   UserRole,
   ApprovalStage,
   ApprovalGroup,
+  ApprovalStatus,
+  RevisionType,
 } from '@repo/database';
 
 import { RequestsRepository }  from '../repositories/requests.repository';
@@ -26,10 +28,9 @@ import { CreateRequestDto }    from '../dto/create-request.dto';
 import { UpdateRequestDto }    from '../dto/query-update.dto';
 import { QueryRequestDto }     from '../dto/query-update.dto';
 
-// CHANGED (H3): Import ROLE_TO_STAGE for role-fallback approver visibility check
 import { ROLE_TO_STAGE } from '../../approvals/domain/entities/approval-step.entity';
 
-// Roles that can view ALL requests (not just their own)
+// Roles that can view ALL requests
 const ADMIN_ROLES = new Set<UserRole>([
   UserRole.SCHOOL_ADMIN,
   UserRole.SUPER_ADMIN,
@@ -117,7 +118,6 @@ export class RequestsService {
     const raw = await this.requestsRepo.findRawById(requestId);
     if (!raw) throw new NotFoundException('Request not found');
 
-    // Only the requestor can submit their own request
     if (raw.requestedById !== userId) {
       throw new ForbiddenException('You can only submit your own requests');
     }
@@ -128,8 +128,7 @@ export class RequestsService {
       );
     }
 
-    // ── Validate the selected adviser exists, is active, holds
-    // the ADVISER role, and is not the requestor themselves (H2 guard).
+    // Validate adviser
     const adviser = await prisma.user.findFirst({
       where: {
         id:        { equals: adviserId, not: userId },
@@ -146,8 +145,7 @@ export class RequestsService {
       );
     }
 
-    // ── NEW: Department Head must exist for the selected approval group
-    // This is a hard block — the request stays in DRAFT status.
+    // Validate Department Head exists for approval group
     const deptHead = await prisma.user.findFirst({
       where: {
         role:           UserRole.DEPARTMENT_HEAD,
@@ -165,7 +163,7 @@ export class RequestsService {
       );
     }
 
-    // ── Venue conflict check ──────────────────────────────────────────────
+    // Venue conflict check
     const request  = await this.requestsRepo.findById(requestId);
     const venueIds = request!.venueBookings?.map(b => b.venueId) ?? [];
 
@@ -187,8 +185,6 @@ export class RequestsService {
       }
     }
 
-    // Pass adviserId explicitly, requestedById to exclude requestor,
-    // and approvalGroup for Department Head routing.
     const approverMap = await this.resolveApprovers(
       adviserId,
       userId,
@@ -207,6 +203,118 @@ export class RequestsService {
     return submitted;
   }
 
+  // ── NEW: Resubmit (REVISION_REQUESTED → resume or restart) ────────────────
+
+  async resubmit(requestId: string, userId: string) {
+    this.logger.log(`[RequestsService] resubmit — requestId: ${requestId}, userId: ${userId}`);
+
+    const request = await this.requestsRepo.findForResubmit(requestId);
+    if (!request) throw new NotFoundException('Request not found');
+
+    // Only the requestor can resubmit
+    if (request.requestedById !== userId) {
+      throw new ForbiddenException('You can only resubmit your own requests');
+    }
+
+    if (request.status !== RequestStatus.REVISION_REQUESTED) {
+      throw new BadRequestException(
+        `Only requests in REVISION_REQUESTED status can be resubmitted. Current status: ${request.status}`,
+      );
+    }
+
+    // Find the step that triggered the revision
+    const triggeringStep = request.approvalSteps.find(
+      s => s.status === ApprovalStatus.REVISION_REQUESTED,
+    );
+
+    if (!triggeringStep) {
+      throw new BadRequestException(
+        'No revision-requested step found. The request may be in an inconsistent state.',
+      );
+    }
+
+    if (!triggeringStep.revisionType) {
+      throw new BadRequestException(
+        'Revision type not found on the triggering step.',
+      );
+    }
+
+    let resubmitted;
+
+    if (triggeringStep.revisionType === RevisionType.REVISION_RESUME) {
+      // ── RESUME: Reset triggering step + suspended steps, restore previous status ─
+      resubmitted = await this.requestsRepo.resubmitResume(requestId);
+
+      this.eventEmitter.emit('request.resubmitted', {
+        requestId,
+        userId,
+        revisionType: RevisionType.REVISION_RESUME,
+        referenceNumber: resubmitted.referenceNumber,
+      });
+
+      this.logger.log(
+        `[RequestsService] resumed: ${resubmitted.referenceNumber} → ${resubmitted.status}`,
+      );
+
+    } else if (triggeringStep.revisionType === RevisionType.REVISION_RESTART) {
+      // ── RESTART: Full restart, retain adviser if still eligible ──────────────
+
+      // 1. Capture the current adviser
+      const currentAdviserStep = request.approvalSteps.find(
+        s => s.stage === ApprovalStage.STAGE_1_ADVISER,
+      );
+      const retainedAdviserId = currentAdviserStep?.approverId ?? null;
+      // 2. Validate retained adviser is still eligible
+      let adviserId: string | null = null;
+      if (retainedAdviserId) {
+        const stillEligible = await prisma.user.findFirst({
+          where: {
+            id:        retainedAdviserId,
+            role:      UserRole.ADVISER,
+            isActive:  true,
+            deletedAt: null,
+            // Cannot be the requestor themselves
+            NOT: { id: userId },
+          },
+          select: { id: true },
+        });
+        adviserId = stillEligible?.id ?? null;
+      }
+
+      // 3. Resolve all approvers (adviser may be null → role fallback)
+      const approverMap = await this.resolveApprovers(
+        adviserId,
+        userId,
+        request.approvalGroup as ApprovalGroup,
+      );
+
+      // 4. Execute restart transaction
+      resubmitted = await this.requestsRepo.resubmitRestart(requestId, approverMap);
+
+      // 5. Update revision metadata
+      await prisma.request.update({
+        where: { id: requestId },
+        data: {
+          revisionCount: { increment: 1 },
+          revisedAt:     new Date(),
+        },
+      });
+
+      this.eventEmitter.emit('request.resubmitted', {
+        requestId,
+        userId,
+        revisionType: RevisionType.REVISION_RESTART,
+        referenceNumber: resubmitted.referenceNumber,
+      });
+
+      this.logger.log(
+        `[RequestsService] restarted: ${resubmitted.referenceNumber} (adviser: ${adviserId ?? 'role fallback'})`,
+      );
+    }
+
+    return resubmitted;
+  }
+
   // ── Find many (role-scoped) ───────────────────────────────────────────────
 
   async findMany(userId: string, userRole: UserRole, query: QueryRequestDto) {
@@ -218,7 +326,7 @@ export class RequestsService {
     let assignedApproverId: string | undefined;
 
     if (ADMIN_ROLES.has(userRole)) {
-      // Admins see everything — no scoping
+      // Admins see everything
     } else if (query.viewMode === 'my_requests') {
       requestedById = userId;
     } else if (query.viewMode === 'for_my_review' && APPROVER_ROLES.has(userRole)) {
@@ -257,20 +365,15 @@ export class RequestsService {
     const request = await this.requestsRepo.findById(requestId);
     if (!request) throw new NotFoundException('Request not found');
 
-    // Path 1: Admin roles always have full visibility.
     if (ADMIN_ROLES.has(userRole)) return request;
-
-    // Path 2: The requestor who owns the request.
     if (request.requestedById === userId) return request;
 
-    // Path 3: Explicitly assigned approver — approverId matches on any step.
     const isAssignedApprover = request.approvalSteps?.some(
       s => s.approverId === userId,
     ) ?? false;
 
     if (isAssignedApprover) return request;
 
-    // Path 4: Role-fallback approver — unassigned step exists for this user's stage.
     const assignedStage = ROLE_TO_STAGE[userRole] ?? null;
     if (assignedStage) {
       const hasMatchingUnassignedStep = request.approvalSteps?.some(
@@ -364,19 +467,17 @@ export class RequestsService {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  // CHANGED: resolveApprovers now matches Department Head by approvalGroup.
-  // All other stages still use role-only matching.
   private async resolveApprovers(
-    adviserId:     string,
+    adviserId:     string | null,
     requestedById: string,
     approvalGroup: ApprovalGroup,
   ): Promise<Record<ApprovalStage, string | null>> {
     const result = {} as Record<ApprovalStage, string | null>;
 
-    // Adviser is always the explicitly selected one.
+    // Adviser: use retained if eligible, otherwise null (role fallback)
     result[ApprovalStage.STAGE_1_ADVISER] = adviserId;
 
-    // Department Head: matched by approvalGroup + role, excluded if it's the requestor.
+    // Department Head: matched by approvalGroup + role
     const deptHead = await prisma.user.findFirst({
       where: {
         role:           UserRole.DEPARTMENT_HEAD,
@@ -389,7 +490,7 @@ export class RequestsService {
     });
     result[ApprovalStage.STAGE_1_DEPT_HEAD] = deptHead?.id ?? null;
 
-    // All other stages: role-only matching, exclude requestor.
+    // All other stages: role-only matching
     const remainingStages: { role: UserRole; stage: ApprovalStage }[] = [
       { role: UserRole.ACADEMIC_HEAD,   stage: ApprovalStage.STAGE_2_ACADEMIC_HEAD           },
       { role: UserRole.STUDENT_AFFAIRS, stage: ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS },

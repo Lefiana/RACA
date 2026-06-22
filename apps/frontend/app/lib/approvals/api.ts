@@ -1,4 +1,4 @@
-// File: apps/frontend/lib/approvals/api.ts
+// File: apps/frontend/app/lib/approvals/api.ts
 // Purpose: Approval chain API calls.
 // Dependencies: apiClient, approvals/types
 
@@ -8,6 +8,7 @@ import type {
   IApprovalsQuery,
   IApprovalsResponse,
   IDecideApprovalDto,
+  IRequestRevisionDto,  // ← NEW
 } from './types';
 
 export async function getPendingApprovals(
@@ -50,6 +51,18 @@ export async function rejectStep(
 ): Promise<IApprovalStep> {
   const res = await apiClient.post<IApprovalStep>(
     `/approvals/${stepId}/reject`,
+    dto,
+  );
+  return res.data;
+}
+
+// ── NEW: Request revision on a step ───────────────────────────────────────
+export async function requestRevision(
+  stepId: string,
+  dto: IRequestRevisionDto,
+): Promise<IApprovalStep> {
+  const res = await apiClient.post<IApprovalStep>(
+    `/approvals/${stepId}/revision`,
     dto,
   );
   return res.data;

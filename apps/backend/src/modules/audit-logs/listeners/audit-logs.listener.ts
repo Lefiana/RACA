@@ -1,5 +1,6 @@
 // File: apps/backend/src/modules/audit-logs/listeners/audit-logs.listener.ts
 // CHANGED: inject PrismaService instead of importing prisma directly
+// NEW: Added listeners for revision_requested, resubmitted, step.revision_requested events
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent }            from '@nestjs/event-emitter';
 import { ApprovalStage }      from '@repo/database';
@@ -12,7 +13,7 @@ export class AuditLogsListener {
 
   constructor(
     private readonly auditLogsService: AuditLogsService,
-    private readonly prisma:           PrismaService, // CHANGED
+    private readonly prisma:           PrismaService,
   ) {}
 
   @OnEvent('request.created')
@@ -106,6 +107,80 @@ export class AuditLogsListener {
       });
     } catch (err: any) {
       this.logger.error(`[AuditListener] request.cancelled error: ${err.message}`);
+    }
+  }
+
+  // ── NEW: Revision requested ───────────────────────────────────────────────
+  @OnEvent('request.revision_requested')
+  async onRevisionRequested(payload: {
+    requestId: string;
+    referenceNumber: string;
+    requestedBy: string;
+    revisionType: string;
+    stage: ApprovalStage;
+    remarks: string;
+  }) {
+    try {
+      const steps = await this.prisma.approvalStep.findMany({
+        where:  { requestId: payload.requestId },
+        orderBy: { stepOrder: 'asc' },
+      });
+
+      await this.auditLogsService.create({
+        performedById: null,
+        requestId:     payload.requestId,
+        action:        'REQUEST_REVISION_REQUESTED',
+        entity:        'Request',
+        entityId:      payload.requestId,
+        snapshot:      {
+          referenceNumber: payload.referenceNumber,
+          revisionType:    payload.revisionType,
+          stage:           payload.stage,
+          remarks:         payload.remarks,
+          stepsSnapshot:   steps,
+        },
+      });
+    } catch (err: any) {
+      this.logger.error(`[AuditListener] request.revision_requested error: ${err.message}`);
+    }
+  }
+
+  // ── NEW: Resubmitted ──────────────────────────────────────────────────────
+  @OnEvent('request.resubmitted')
+  async onResubmitted(payload: {
+    requestId: string;
+    userId: string;
+    revisionType: string;
+    referenceNumber: string;
+  }) {
+    try {
+      const request = await this.prisma.request.findUnique({
+        where:  { id: payload.requestId },
+        select: {
+          referenceNumber: true,
+          status:          true,
+          revisionCount:   true,
+          approvalSteps:   { orderBy: { stepOrder: 'asc' } },
+        },
+      });
+      if (!request) return;
+
+      await this.auditLogsService.create({
+        performedById: payload.userId,
+        requestId:     payload.requestId,
+        action:        'REQUEST_RESUBMITTED',
+        entity:        'Request',
+        entityId:      payload.requestId,
+        snapshot:      {
+          referenceNumber: request.referenceNumber,
+          status:          request.status,
+          revisionType:    payload.revisionType,
+          revisionCount:   request.revisionCount,
+          stepsSnapshot:   request.approvalSteps,
+        },
+      });
+    } catch (err: any) {
+      this.logger.error(`[AuditListener] request.resubmitted error: ${err.message}`);
     }
   }
 
@@ -206,6 +281,48 @@ export class AuditLogsListener {
       });
     } catch (err: any) {
       this.logger.error(`[AuditListener] approval.step.rejected error: ${err.message}`);
+    }
+  }
+
+  // ── NEW: Step revision requested ──────────────────────────────────────────
+  @OnEvent('approval.step.revision_requested')
+  async onStepRevisionRequested(payload: {
+    stepId: string;
+    requestId: string;
+    stage: ApprovalStage;
+    approverId: string;
+    revisionType: string;
+    remarks: string;
+  }) {
+    try {
+      const step = await this.prisma.approvalStep.findUnique({
+        where:  { id: payload.stepId },
+        select: {
+          approverName: true,
+          approverRole: true,
+          approverTitle: true,
+          remarks: true,
+          decidedAt: true,
+          revisionType: true,
+        },
+      });
+      if (!step) return;
+
+      await this.auditLogsService.create({
+        performedById: payload.approverId,
+        requestId:     payload.requestId,
+        action:        'STEP_REVISION_REQUESTED',
+        entity:        'ApprovalStep',
+        entityId:      payload.stepId,
+        snapshot:      {
+          stage:        payload.stage,
+          revisionType: payload.revisionType,
+          remarks:      payload.remarks,
+          ...step,
+        },
+      });
+    } catch (err: any) {
+      this.logger.error(`[AuditListener] approval.step.revision_requested error: ${err.message}`);
     }
   }
 

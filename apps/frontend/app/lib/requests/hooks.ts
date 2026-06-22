@@ -1,4 +1,4 @@
-// File: apps/frontend/lib/requests/hooks.ts
+// File: apps/frontend/app/lib/requests/hooks.ts
 // Purpose: TanStack Query hooks for the request lifecycle.
 // Dependencies: @tanstack/react-query, requests/api, requests/types
 
@@ -11,12 +11,14 @@ import {
   createRequest,
   updateRequest,
   submitRequest,
+  resubmitRequest,  // ← NEW
   cancelRequest,
 } from './api';
 import type {
   ICreateRequestDto,
   IUpdateRequestDto,
   ISubmitRequestDto,
+  IResubmitRequestDto,  // ← NEW
   IGetRequestsParams,
 } from './types';
 
@@ -28,8 +30,6 @@ export const requestKeys = {
   detail: (id: string) => [...requestKeys.all, 'detail', id] as const,
 };
 
-// CHANGED: params object (including viewMode) is part of the query key.
-// Switching from my_requests to for_my_review triggers a clean refetch.
 export function useRequests(params: IGetRequestsParams = {}) {
   return useQuery({
     queryKey: requestKeys.list(params),
@@ -66,8 +66,6 @@ export function useUpdateRequest(id: string) {
   });
 }
 
-// CHANGED: mutationFn now structured to directly process structured state object payloads:
-// { id: string; adviserId: string } or nested payload models safely.
 export function useSubmitRequest() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -76,6 +74,20 @@ export function useSubmitRequest() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: requestKeys.lists() });
       queryClient.invalidateQueries({ queryKey: requestKeys.detail(data.id) });
+    },
+  });
+}
+
+// ── NEW: Resubmit hook ──────────────────────────────────────────────────────
+export function useResubmitRequest(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (dto?: IResubmitRequestDto) => resubmitRequest(id, dto ?? {}),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: requestKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: requestKeys.detail(data.id) });
+      // Also invalidate approvals for this request
+      queryClient.invalidateQueries({ queryKey: ['approvals', 'request', data.id] });
     },
   });
 }

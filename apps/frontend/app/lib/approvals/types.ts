@@ -1,9 +1,16 @@
-// File: apps/frontend/lib/approvals/types.ts
+// File: apps/frontend/app/lib/approvals/types.ts
 // Purpose: TypeScript interfaces for the approval chain.
 
 import type { IPaginatedResponse } from '../types';
 
-export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SKIPPED';
+// CHANGED: Added REVISION_REQUESTED, SUSPENDED
+export type ApprovalStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'SKIPPED'
+  | 'REVISION_REQUESTED'  // ← NEW
+  | 'SUSPENDED';           // ← NEW
 
 export type ApprovalStage =
   | 'STAGE_1_ADVISER'
@@ -13,6 +20,9 @@ export type ApprovalStage =
   | 'STAGE_2_HEAD_OF_STUDENT_AFFAIRS'
   | 'STAGE_2_ACADEMIC_HEAD'
   | 'STAGE_3_SCHOOL_ADMIN';
+
+// ── NEW: RevisionType ───────────────────────────────────────────────────────
+export type RevisionType = 'REVISION_RESUME' | 'REVISION_RESTART';
 
 export interface IApprovalStep {
   id:              string;
@@ -27,6 +37,8 @@ export interface IApprovalStep {
   remarks:         string | null;
   rejectionReason: string | null;
   decidedAt:       string | null;
+  // ── NEW ──────────────────────────────────────────────────────────────────
+  revisionType:    RevisionType | null;
   createdAt:       string;
   updatedAt:       string;
   request?: {
@@ -47,6 +59,12 @@ export interface IApprovalStep {
 export interface IDecideApprovalDto {
   remarks?:         string;
   rejectionReason?: string;
+}
+
+// ── NEW: Request Revision DTO ───────────────────────────────────────────────
+export interface IRequestRevisionDto {
+  revisionType: RevisionType;
+  remarks:      string;
 }
 
 export interface IApprovalsQuery {

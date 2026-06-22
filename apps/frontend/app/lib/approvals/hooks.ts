@@ -1,4 +1,4 @@
-// File: apps/frontend/lib/approvals/hooks.ts
+// File: apps/frontend/app/lib/approvals/hooks.ts
 // Purpose: TanStack Query hooks for the approval chain.
 // Dependencies: @tanstack/react-query, approvals/api
 
@@ -10,9 +10,14 @@ import {
   getApprovalsByRequest,
   getPendingApprovals,
   rejectStep,
-  getStepById
+  getStepById,
+  requestRevision,  // ← NEW
 } from './api';
-import type { IApprovalsQuery, IDecideApprovalDto } from './types';
+import type {
+  IApprovalsQuery,
+  IDecideApprovalDto,
+  IRequestRevisionDto,  // ← NEW
+} from './types';
 import { requestKeys } from '../requests/hooks';
 
 export const approvalKeys = {
@@ -52,7 +57,6 @@ export function useApproveStep() {
     mutationFn: ({ stepId, dto }: { stepId: string; dto: IDecideApprovalDto }) =>
       approveStep(stepId, dto),
     onSuccess: (data) => {
-      // Invalidate the request detail and pending queue
       queryClient.invalidateQueries({
         queryKey: requestKeys.detail(data.requestId),
       });
@@ -78,6 +82,30 @@ export function useRejectStep() {
         queryKey: approvalKeys.byRequest(data.requestId),
       });
       queryClient.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+    },
+  });
+}
+
+// ── NEW: Request revision hook ──────────────────────────────────────────────
+export function useRequestRevision() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ stepId, dto }: { stepId: string; dto: IRequestRevisionDto }) =>
+      requestRevision(stepId, dto),
+    onSuccess: (data) => {
+      // Invalidate request detail and approvals
+      queryClient.invalidateQueries({
+        queryKey: requestKeys.detail(data.requestId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: approvalKeys.byRequest(data.requestId),
+      });
+      queryClient.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+      // Also invalidate the specific step
+      queryClient.invalidateQueries({
+        queryKey: [...approvalKeys.all, 'step', data.id],
+      });
     },
   });
 }

@@ -1,5 +1,7 @@
 // File: apps/backend/src/modules/notifications/listeners/notifications.listener.ts
 // CHANGED: inject PrismaService instead of importing prisma directly
+// CHANGED: Fixed request.submitted to notify ONLY the assigned adviser (not all advisers)
+// NEW: Added listeners for revision_requested and resubmitted events
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent }            from '@nestjs/event-emitter';
 import { NotificationType, ApprovalStage, UserRole } from '@repo/database';
@@ -39,19 +41,25 @@ export class NotificationsListener {
 
   constructor(
     private readonly notificationsService: NotificationsService,
-    private readonly prisma:               PrismaService, // CHANGED
+    private readonly prisma:               PrismaService,
   ) {}
 
+  // ── CHANGED: Notify ONLY the assigned adviser, not all advisers ───────────
   @OnEvent('request.submitted')
   async onRequestSubmitted(payload: { requestId: string; userId: string; referenceNumber: string }) {
     try {
-      const advisers = await this.prisma.user.findMany({
-        where:  { role: 'ADVISER', isActive: true, deletedAt: null },
-        select: { id: true },
+      // Find the specifically assigned adviser for this request
+      const adviserStep = await this.prisma.approvalStep.findFirst({
+        where: {
+          requestId: payload.requestId,
+          stage:     ApprovalStage.STAGE_1_ADVISER,
+        },
+        select: { approverId: true },
       });
-      for (const adviser of advisers) {
+
+      if (adviserStep?.approverId) {
         await this.notificationsService.createAndPush({
-          userId:    adviser.id,
+          userId:    adviserStep.approverId,
           type:      NotificationType.REQUEST_SUBMITTED,
           title:     'New request awaiting your review',
           body:      `Request ${payload.referenceNumber} has been submitted and requires your approval.`,
@@ -152,6 +160,70 @@ export class NotificationsListener {
       });
     } catch (err: any) {
       this.logger.error(`[Listener] approval.step.rejected error: ${err.message}`);
+    }
+  }
+
+  // ── NEW: Revision requested ───────────────────────────────────────────────
+  @OnEvent('request.revision_requested')
+  async onRevisionRequested(payload: {
+    requestId: string;
+    referenceNumber: string;
+    requestedBy: string;
+    revisionType: string;
+    stage: ApprovalStage;
+    remarks: string;
+  }) {
+    try {
+      await this.notificationsService.createAndPush({
+        userId:    payload.requestedBy,
+        type:      NotificationType.REVISION_REQUESTED,
+        title:     `Revision requested by ${STAGE_LABEL[payload.stage]}`,
+        body:      `${payload.referenceNumber} requires revision. Reason: ${payload.remarks}`,
+        requestId: payload.requestId,
+        metadata:  { revisionType: payload.revisionType, stage: payload.stage, remarks: payload.remarks },
+      });
+    } catch (err: any) {
+      this.logger.error(`[Listener] request.revision_requested error: ${err.message}`);
+    }
+  }
+
+  // ── NEW: Resubmitted ──────────────────────────────────────────────────────
+  @OnEvent('request.resubmitted')
+  async onResubmitted(payload: {
+    requestId: string;
+    userId: string;
+    revisionType: string;
+    referenceNumber: string;
+  }) {
+    try {
+      const request = await this.prisma.request.findUnique({
+        where:  { id: payload.requestId },
+        select: { status: true, approvalSteps: { select: { stage: true, approverId: true } } },
+      });
+      if (!request) return;
+
+      // Notify the next approver(s) based on restored status
+      let stagesToNotify: ApprovalStage[] = [];
+      if (request.status === 'PENDING') stagesToNotify = [ApprovalStage.STAGE_1_ADVISER];
+      else if (request.status === 'STAGE1_REVIEW') stagesToNotify = [ApprovalStage.STAGE_1_DEPT_HEAD];
+      else if (request.status === 'STAGE2_REVIEW') stagesToNotify = STAGE2_STAGES;
+      else if (request.status === 'PENDING_FINAL') stagesToNotify = [ApprovalStage.STAGE_3_SCHOOL_ADMIN];
+
+      for (const stage of stagesToNotify) {
+        const step = request.approvalSteps.find(s => s.stage === stage);
+        if (step?.approverId) {
+          await this.notificationsService.createAndPush({
+            userId:    step.approverId,
+            type:      NotificationType.STAGE_ADVANCED,
+            title:     `Request resubmitted for ${STAGE_LABEL[stage]} review`,
+            body:      `${payload.referenceNumber} has been resubmitted after revision and requires your action.`,
+            requestId: payload.requestId,
+            metadata:  { stage, revisionType: payload.revisionType },
+          });
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`[Listener] request.resubmitted error: ${err.message}`);
     }
   }
 

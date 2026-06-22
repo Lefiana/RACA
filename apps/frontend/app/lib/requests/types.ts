@@ -1,9 +1,18 @@
-// File: apps/frontend/lib/requests/types.ts
+// File: apps/frontend/app/lib/requests/types.ts
 // Purpose: All TypeScript interfaces for the requests module.
 // Dependencies: ../types
 
 import type { IPaginatedResponse } from '../types';
 
+// ── NEW: ApprovalGroup enum ─────────────────────────────────────────────────
+export type ApprovalGroup =
+  | 'IT_CPE'
+  | 'ART_SCIENCE'
+  | 'THM_BM'
+  | 'ASST_PRINCIPAL'
+  | 'GEN_ED';
+
+// CHANGED: Added REVISION_REQUESTED
 export type RequestStatus =
   | 'DRAFT'
   | 'PENDING'
@@ -13,7 +22,8 @@ export type RequestStatus =
   | 'APPROVED'
   | 'REJECTED'
   | 'CANCELLED'
-  | 'COMPLETED';
+  | 'COMPLETED'
+  | 'REVISION_REQUESTED';  // ← NEW
 
 export type ApprovalStage =
   | 'STAGE_1_ADVISER'
@@ -24,7 +34,14 @@ export type ApprovalStage =
   | 'STAGE_2_BUILDING'
   | 'STAGE_3_SCHOOL_ADMIN';
 
-export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SKIPPED';
+// CHANGED: Added REVISION_REQUESTED, SUSPENDED
+export type ApprovalStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'SKIPPED'
+  | 'REVISION_REQUESTED'  // ← NEW
+  | 'SUSPENDED';           // ← NEW
 
 export interface IRequestApprovalStep {
   id:              string;
@@ -38,6 +55,8 @@ export interface IRequestApprovalStep {
   remarks:         string | null;
   rejectionReason: string | null;
   decidedAt:       string | null;
+  // ── NEW ──────────────────────────────────────────────────────────────────
+  revisionType:    'REVISION_RESUME' | 'REVISION_RESTART' | null;
 }
 
 export interface IRequestVenueBooking {
@@ -72,6 +91,7 @@ export interface IRequestedBy {
   department: string | null;
 }
 
+// CHANGED: Added approvalGroup, revisionCount, revisedAt, previousStatus
 export interface IRequest {
   id:                    string;
   referenceNumber:       string;
@@ -90,6 +110,11 @@ export interface IRequest {
   status:                RequestStatus;
   submittedAt:           string | null;
   completedAt:           string | null;
+  // ── NEW ──────────────────────────────────────────────────────────────────
+  approvalGroup:         ApprovalGroup | null;
+  revisionCount:         number;
+  revisedAt:             string | null;
+  previousStatus:        RequestStatus | null;
   createdAt:             string;
   updatedAt:             string;
   requestedBy?:          IRequestedBy;
@@ -113,6 +138,7 @@ export interface IAssetSelection {
   quantity: number;
 }
 
+// CHANGED: Added approvalGroup
 export interface ICreateRequestDto {
   activityTitle:         string;
   theme?:                string;
@@ -127,6 +153,8 @@ export interface ICreateRequestDto {
   expectedAudience?:     string;
   expectedHeadcount?:    number;
   remarks?:              string;
+  // ── NEW ──────────────────────────────────────────────────────────────────
+  approvalGroup:         ApprovalGroup;
 }
 
 export type IUpdateRequestDto = Partial<ICreateRequestDto>;
@@ -134,6 +162,9 @@ export type IUpdateRequestDto = Partial<ICreateRequestDto>;
 export interface ISubmitRequestDto {
   adviserId: string;
 }
+
+// ── NEW: Resubmit DTO (empty body) ──────────────────────────────────────
+export interface IResubmitRequestDto {}
 
 // CHANGED: viewMode added — controls backend scoping for list queries
 export interface IGetRequestsParams {

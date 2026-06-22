@@ -1,11 +1,15 @@
 // File: apps/backend/src/modules/approvals/repositories/approvals.repository.ts
-// CHANGED: inject PrismaService instead of importing prisma directly
+// Purpose: All Prisma queries for approval steps, decisions, chain transitions,
+//          and revision workflows. The service layer never calls prisma directly.
+// Dependencies: @repo/database, @nestjs/common
+
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma.service';
 import {
   ApprovalStage,
   ApprovalStatus,
   RequestStatus,
+  RevisionType,
 } from '@repo/database';
 
 const STEP_WITH_REQUEST = {
@@ -113,10 +117,127 @@ export class ApprovalsRepository {
     });
   }
 
+  // ── NEW: Record a revision request on a step ────────────────────────────────
+  async recordRevision(stepId: string, data: {
+    revisionType: RevisionType;
+    approverName: string;
+    approverRole: string;
+    approverTitle: string;
+    remarks: string;
+  }) {
+    return this.prisma.approvalStep.update({
+      where: { id: stepId },
+      data: {
+        status:        ApprovalStatus.REVISION_REQUESTED,
+        revisionType:    data.revisionType,
+        approverName:    data.approverName,
+        approverRole:    data.approverRole,
+        approverTitle:   data.approverTitle,
+        remarks:         data.remarks,
+        decidedAt:       new Date(),
+      },
+      include: STEP_WITH_REQUEST,
+    });
+  }
+
+  // ── NEW: Suspend all PENDING steps after a given stepOrder ────────────────
+  async suspendPendingStepsAfter(requestId: string, afterStepOrder: number) {
+    return this.prisma.approvalStep.updateMany({
+      where: {
+        requestId,
+        stepOrder: { gt: afterStepOrder },
+        status:    ApprovalStatus.PENDING,
+      },
+      data: { status: ApprovalStatus.SUSPENDED },
+    });
+  }
+
+  // ── NEW: Reset SUSPENDED steps back to PENDING ────────────────────────────
+  async resetSuspendedSteps(requestId: string) {
+    return this.prisma.approvalStep.updateMany({
+      where: {
+        requestId,
+        status: ApprovalStatus.SUSPENDED,
+      },
+      data: {
+        status:        ApprovalStatus.PENDING,
+        revisionType:  null,
+        decidedAt:     null,
+        remarks:       null,
+        approverName:  null,
+        approverRole:  null,
+        approverTitle: null,
+      },
+    });
+  }
+
+  // ── NEW: Reset a single REVISION_REQUESTED step back to PENDING ─────────────
+  async resetRevisionStep(stepId: string) {
+    return this.prisma.approvalStep.update({
+      where: { id: stepId },
+      data: {
+        status:        ApprovalStatus.PENDING,
+        revisionType:  null,
+        decidedAt:     null,
+        remarks:       null,
+        approverName:  null,
+        approverRole:  null,
+        approverTitle: null,
+      },
+      include: STEP_WITH_REQUEST,
+    });
+  }
+
+  // ── NEW: Delete all steps for a request (used in REVISION_RESTART) ──────────
+  async deleteAllSteps(requestId: string) {
+    return this.prisma.approvalStep.deleteMany({
+      where: { requestId },
+    });
+  }
+
+  // ── NEW: Create multiple steps at once (used in REVISION_RESTART) ───────────
+  async createSteps(data: {
+    requestId: string;
+    stage: ApprovalStage;
+    stepOrder: number;
+    title: string;
+    approverId: string | null;
+  }[]) {
+    return this.prisma.approvalStep.createMany({
+      data: data.map(step => ({
+        requestId:     step.requestId,
+        stage:         step.stage,
+        stepOrder:     step.stepOrder,
+        approverTitle: step.title,
+        approverId:    step.approverId,
+        status:        ApprovalStatus.PENDING,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
   async transitionRequestStatus(requestId: string, status: RequestStatus) {
     return this.prisma.request.update({
       where: { id: requestId },
       data:  { status },
+    });
+  }
+
+  // ── NEW: Update request revision fields ───────────────────────────────────
+  async updateRequestRevisionState(requestId: string, data: {
+    status: RequestStatus;
+    previousStatus?: RequestStatus | null;
+    revisionCount?: { increment: number };
+    revisedAt?: Date;
+  }) {
+    return this.prisma.request.update({
+      where: { id: requestId },
+      data: {
+        status: data.status,
+        ...(data.previousStatus !== undefined && { previousStatus: data.previousStatus }),
+        ...(data.revisionCount && { revisionCount: data.revisionCount }),
+        ...(data.revisedAt && { revisedAt: data.revisedAt }),
+      },
     });
   }
 
@@ -170,6 +291,35 @@ export class ApprovalsRepository {
         status: ApprovalStatus.APPROVED,
       },
     });
+  }
+
+  // ── NEW: Count how many Stage 2 steps exist (for restart validation) ───────
+  async countStage2Steps(requestId: string): Promise<number> {
+    return this.prisma.approvalStep.count({
+      where: {
+        requestId,
+        stage: {
+          in: [
+            ApprovalStage.STAGE_2_MIS,
+            ApprovalStage.STAGE_2_BUILDING,
+            ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS,
+            ApprovalStage.STAGE_2_ACADEMIC_HEAD,
+          ],
+        },
+      },
+    });
+  }
+
+  // ── NEW: Get the current adviser step's approverId ──────────────────────────
+  async findAdviserApproverId(requestId: string): Promise<string | null> {
+    const step = await this.prisma.approvalStep.findFirst({
+      where: {
+        requestId,
+        stage: ApprovalStage.STAGE_1_ADVISER,
+      },
+      select: { approverId: true },
+    });
+    return step?.approverId ?? null;
   }
 
   private actionableRequestStatuses(stage: ApprovalStage | null): RequestStatus[] {

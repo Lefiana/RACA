@@ -19,10 +19,11 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Session, UserSession } from '@thallesp/nestjs-better-auth';
 import { UserRole } from '@repo/database';
 
-import { ApprovalsService }                        from '../services/approvals.service';
-import { DecideApprovalDto }                        from '../dto/decide-approval.dto';
-import { QueryApprovalsDto }                        from '../dto/query-approvals.dto';
-import { Roles }                        from '../../auth/decorators';
+import { ApprovalsService }     from '../services/approvals.service';
+import { DecideApprovalDto }    from '../dto/decide-approval.dto';
+import { RequestRevisionDto }   from '../dto/request-revision.dto';
+import { QueryApprovalsDto }    from '../dto/query-approvals.dto';
+import { Roles }                from '../../auth/decorators';
 
 // All approver roles — any of these can reach the pending queue
 const APPROVER_ROLES = [
@@ -43,8 +44,6 @@ export class ApprovalsController {
   constructor(private readonly approvalsService: ApprovalsService) {}
 
   // GET /api/v1/approvals/pending
-  // Returns the paginated list of steps currently awaiting the session user.
-  // Only approver roles can access this — requestors have no pending queue.
   @Get('pending')
   @Roles(...APPROVER_ROLES)
   @ApiOperation({ summary: 'Get pending approval steps for the current user' })
@@ -60,8 +59,6 @@ export class ApprovalsController {
   }
 
   // GET /api/v1/approvals/request/:requestId
-  // Full approval timeline for a specific request.
-  // Used by the request detail page to render the approval chain.
   @Get('request/:requestId')
   @ApiOperation({ summary: 'Get all approval steps for a request' })
   async findByRequest(@Param('requestId') requestId: string) {
@@ -102,7 +99,6 @@ export class ApprovalsController {
   }
 
   // POST /api/v1/approvals/:stepId/reject
-  // rejectionReason is required — enforced in the service layer
   @Post(':stepId/reject')
   @HttpCode(HttpStatus.OK)
   @Roles(...APPROVER_ROLES)
@@ -113,6 +109,25 @@ export class ApprovalsController {
     @Body()           dto:     DecideApprovalDto,
   ) {
     return this.approvalsService.reject(
+      stepId,
+      session.user.id,
+      session.user.name,
+      (session.user as any).role,
+      dto,
+    );
+  }
+
+  // ── NEW: POST /api/v1/approvals/:stepId/revision ───────────────────────────
+  @Post(':stepId/revision')
+  @HttpCode(HttpStatus.OK)
+  @Roles(...APPROVER_ROLES)
+  @ApiOperation({ summary: 'Request revision on a pending step (REVISION_RESUME or REVISION_RESTART)' })
+  async requestRevision(
+    @Session()        session: UserSession,
+    @Param('stepId')  stepId:  string,
+    @Body()           dto:     RequestRevisionDto,
+  ) {
+    return this.approvalsService.requestRevision(
       stepId,
       session.user.id,
       session.user.name,

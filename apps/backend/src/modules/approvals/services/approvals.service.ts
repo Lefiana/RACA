@@ -1,9 +1,8 @@
 // File: apps/backend/src/modules/approvals/services/approvals.service.ts
 // Purpose: Core approval chain engine.
-//          Handles approve/reject decisions, stage transitions,
+//          Handles approve/reject/revision decisions, stage transitions,
 //          venue locking/unlocking, parallel Stage 2 completion detection,
 //          and domain event emission.
-//          All chain logic is here — no business logic in the controller.
 // Dependencies: ApprovalsRepository, EventEmitter2, @nestjs/common, @repo/database
 
 import {
@@ -18,10 +17,12 @@ import {
   ApprovalStage,
   ApprovalStatus,
   RequestStatus,
+  RevisionType,
 } from '@repo/database';
 
 import { ApprovalsRepository }  from '../repositories/approvals.repository';
 import { DecideApprovalDto }    from '../dto/decide-approval.dto';
+import { RequestRevisionDto }   from '../dto/request-revision.dto';
 import { QueryApprovalsDto }    from '../dto/query-approvals.dto';
 import {
   STAGE_ROLE_LABEL,
@@ -74,20 +75,18 @@ export class ApprovalsService {
   }
 
   async findStepById(stepId: string, userId: string, userRole: string) {
-  const step = await this.approvalsRepo.findStepById(stepId);
-  if (!step) throw new NotFoundException('Approval step not found');
+    const step = await this.approvalsRepo.findStepById(stepId);
+    if (!step) throw new NotFoundException('Approval step not found');
 
-  // Verify the user is the assigned approver or has the matching role
-  const { ROLE_TO_STAGE } = await import('../domain/entities/approval-step.entity');
-  const userStage          = ROLE_TO_STAGE[userRole] ?? null;
-  const isAssigned         = step.approverId === userId;
-  const isRoleFallback     = step.approverId === null && userStage === step.stage;
+    const userStage      = ROLE_TO_STAGE[userRole] ?? null;
+    const isAssigned     = step.approverId === userId;
+    const isRoleFallback = step.approverId === null && userStage === step.stage;
 
-  if (!isAssigned && !isRoleFallback) {
-    throw new ForbiddenException('You are not authorized to view this step');
-  }
+    if (!isAssigned && !isRoleFallback) {
+      throw new ForbiddenException('You are not authorized to view this step');
+    }
 
-  return step;
+    return step;
   }
 
   // ── Approve ───────────────────────────────────────────────────────────────
@@ -104,10 +103,8 @@ export class ApprovalsService {
     const step = await this.approvalsRepo.findStepById(stepId);
     if (!step) throw new NotFoundException('Approval step not found');
 
-    // Verify this user is allowed to act on this step
     this.assertCanAct(step, userId, userRole);
 
-    // Record the approval with an immutable snapshot
     const decided = await this.approvalsRepo.recordDecision(stepId, {
       status:        ApprovalStatus.APPROVED,
       approverName:  userName,
@@ -125,7 +122,6 @@ export class ApprovalsService {
       approverId: userId,
     });
 
-    // Advance the chain based on which stage just approved
     await this.advanceChain(step.requestId, step.stage);
 
     return decided;
@@ -142,8 +138,6 @@ export class ApprovalsService {
   ) {
     this.logger.log(`[ApprovalsService] reject — stepId: ${stepId}, userId: ${userId}`);
 
-    // rejectionReason is mandatory on reject — enforced here not in the DTO
-    // so both endpoints share the same DTO shape
     if (!dto.rejectionReason || dto.rejectionReason.trim().length < 10) {
       throw new BadRequestException(
         'A rejection reason of at least 10 characters is required',
@@ -155,7 +149,6 @@ export class ApprovalsService {
 
     this.assertCanAct(step, userId, userRole);
 
-    // Record the rejection with snapshot
     const decided = await this.approvalsRepo.recordDecision(stepId, {
       status:          ApprovalStatus.REJECTED,
       approverName:    userName,
@@ -165,7 +158,6 @@ export class ApprovalsService {
       rejectionReason: dto.rejectionReason,
     });
 
-    // Terminate the chain
     await this.terminateChain(step.requestId, stepId);
 
     this.logger.log(`[ApprovalsService] rejected: ${step.stage} on ${step.requestId}`);
@@ -190,12 +182,86 @@ export class ApprovalsService {
     return decided;
   }
 
+  // ── NEW: Request Revision ─────────────────────────────────────────────────
+
+  async requestRevision(
+    stepId:   string,
+    userId:   string,
+    userName: string,
+    userRole: string,
+    dto:      RequestRevisionDto,
+  ) {
+    this.logger.log(
+      `[ApprovalsService] requestRevision — stepId: ${stepId}, type: ${dto.revisionType}, userId: ${userId}`,
+    );
+
+    const step = await this.approvalsRepo.findStepById(stepId);
+    if (!step) throw new NotFoundException('Approval step not found');
+
+    this.assertCanAct(step, userId, userRole);
+
+    // Validate remarks
+    if (!dto.remarks || dto.remarks.trim().length < 10) {
+      throw new BadRequestException('Revision remarks must be at least 10 characters');
+    }
+
+    // Capture current request status before we change it
+    const currentRequestStatus = step.request?.status as RequestStatus;
+
+    // ── Execute revision atomically ─────────────────────────────────────────
+    const revisedStep = await this.approvalsRepo.recordRevision(stepId, {
+      revisionType:  dto.revisionType,
+      approverName:  userName,
+      approverRole:  userRole,
+      approverTitle: STAGE_ROLE_LABEL[step.stage],
+      remarks:       dto.remarks,
+    });
+
+    // Suspend all PENDING steps after this one
+    await this.approvalsRepo.suspendPendingStepsAfter(
+      step.requestId,
+      step.stepOrder,
+    );
+
+    // Update request to REVISION_REQUESTED state
+    await this.approvalsRepo.updateRequestRevisionState(step.requestId, {
+      status:         RequestStatus.REVISION_REQUESTED,
+      previousStatus: currentRequestStatus,
+      revisionCount:  { increment: 1 },
+      revisedAt:      new Date(),
+    });
+
+    this.logger.log(
+      `[ApprovalsService] revision requested: ${dto.revisionType} on ${step.stage} for ${step.requestId}`,
+    );
+
+    // Emit events
+    this.eventEmitter.emit('approval.step.revision_requested', {
+      stepId,
+      requestId:    step.requestId,
+      stage:        step.stage,
+      approverId:   userId,
+      revisionType: dto.revisionType,
+      remarks:      dto.remarks,
+    });
+
+    this.eventEmitter.emit('request.revision_requested', {
+      requestId:       step.requestId,
+      referenceNumber: step.request?.referenceNumber,
+      requestedBy:     step.request?.requestedBy?.id,
+      revisionType:    dto.revisionType,
+      stage:           step.stage,
+      remarks:         dto.remarks,
+    });
+
+    return revisedStep;
+  }
+
   // ── Chain advancement engine ──────────────────────────────────────────────
 
   private async advanceChain(requestId: string, approvedStage: ApprovalStage) {
     switch (approvedStage) {
 
-      // ── Stage 1: Adviser approved → transition to STAGE1_REVIEW
       case ApprovalStage.STAGE_1_ADVISER: {
         await this.approvalsRepo.transitionRequestStatus(
           requestId,
@@ -210,13 +276,11 @@ export class ApprovalsService {
         break;
       }
 
-      // ── Stage 1: Dept Head approved → STAGE2_REVIEW + lock venues
       case ApprovalStage.STAGE_1_DEPT_HEAD: {
         await this.approvalsRepo.transitionRequestStatus(
           requestId,
           RequestStatus.STAGE2_REVIEW,
         );
-        // Lock venues now — this is the commitment point before parallel approvals
         await this.approvalsRepo.lockVenues(requestId);
 
         this.eventEmitter.emit('request.stage.advanced', {
@@ -228,8 +292,6 @@ export class ApprovalsService {
         break;
       }
 
-      // ── Stage 2: One of the four parallel approvers approved
-      // Check if ALL four have now approved — if so advance to PENDING_FINAL
       case ApprovalStage.STAGE_2_MIS:
       case ApprovalStage.STAGE_2_BUILDING:
       case ApprovalStage.STAGE_2_HEAD_OF_STUDENT_AFFAIRS:
@@ -255,7 +317,6 @@ export class ApprovalsService {
         break;
       }
 
-      // ── Stage 3: School Admin approved → APPROVED + confirm venues
       case ApprovalStage.STAGE_3_SCHOOL_ADMIN: {
         await this.approvalsRepo.transitionRequestStatus(
           requestId,
@@ -281,11 +342,8 @@ export class ApprovalsService {
 
   private async terminateChain(requestId: string, rejectedStepId: string) {
     await Promise.all([
-      // Mark request as rejected
       this.approvalsRepo.transitionRequestStatus(requestId, RequestStatus.REJECTED),
-      // Skip all remaining PENDING steps
       this.approvalsRepo.skipRemainingSteps(requestId, rejectedStepId),
-      // Release venue locks — venues are no longer reserved
       this.approvalsRepo.unlockVenues(requestId),
     ]);
 
@@ -294,19 +352,16 @@ export class ApprovalsService {
 
   // ── Authorization guard ───────────────────────────────────────────────────
 
-  // Verifies the session user is allowed to act on this specific step.
-  // Two valid paths:
-  //   1. User is explicitly assigned (step.approverId === userId)
-  //   2. Step is unassigned (approverId is null) AND user has the matching role
   private assertCanAct(
     step:     { approverId: string | null; stage: ApprovalStage; status: ApprovalStatus },
     userId:   string,
     userRole: string,
   ) {
-    // Step must still be pending
+    // Only PENDING steps can be acted on. This naturally blocks:
+    // APPROVED, REJECTED, SKIPPED, REVISION_REQUESTED, SUSPENDED
     if (step.status !== ApprovalStatus.PENDING) {
       throw new BadRequestException(
-        `This step has already been ${step.status.toLowerCase()}`,
+        `This step has already been ${step.status.toLowerCase().replace('_', ' ')}`,
       );
     }
 
