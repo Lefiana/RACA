@@ -1,6 +1,5 @@
 // File: apps/frontend/lib/users/hooks.ts
-// Purpose: TanStack Query hooks for user management.
-// Dependencies: @tanstack/react-query, users/api
+// CHANGED: useAdvisers now calls getAdvisers (public /users/advisers endpoint)
 
 'use client';
 
@@ -10,6 +9,7 @@ import {
   getMe,
   getUserById,
   getUsers,
+  getAdvisers,  // ← NEW import
   toggleUserActive,
   updateUserRole,
   createUser
@@ -72,10 +72,11 @@ export function useUpdateUserRole() {
   });
 }
 
+// ── CHANGED: now uses public /users/advisers endpoint ───────────────────────
 export function useAdvisers() {
   return useQuery({
     queryKey: ['users', 'advisers'],
-    queryFn:  () => getUsers({ role: 'ADVISER', limit: 100 }),
+    queryFn:  getAdvisers,
     staleTime: 5 * 60 * 1000, // adviser list rarely changes — cache for 5 min
   });
 }

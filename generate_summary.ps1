@@ -1,17 +1,15 @@
-# Adjusted paths based on your actual directory structure
+# Define the bridge files to summarize
 $fileList = @(
-    "apps/frontend/app/lib/requests/types.ts",
-    "apps/frontend/app/lib/requests/api.ts",
-    "apps/frontend/app/lib/requests/hooks.ts",
-    "apps/frontend/app/lib/approvals/types.ts",
-    "apps/frontend/app/lib/approvals/api.ts",
-    "apps/frontend/app/lib/approvals/hooks.ts",
+    "apps/backend/src/modules/auth/users/users.controller.ts",
+    "apps/backend/src/modules/auth/users/users.service.ts",
+    "apps/backend/src/modules/auth/users/users.module.ts",
+    "apps/frontend/app/lib/users/api.ts",
+    "apps/frontend/app/lib/users/hooks.ts",
     "apps/frontend/app/lib/users/types.ts"
 )
 
-$outputFile = "combined_api_summary.txt"
+$outputFile = "user_module_summary.txt"
 
-# Clear previous output file if it exists
 if (Test-Path $outputFile) { Remove-Item $outputFile }
 
 foreach ($file in $fileList) {
@@ -26,4 +24,4 @@ foreach ($file in $fileList) {
     }
 }
 
-Write-Host "Success! Summary saved to: $outputFile" -ForegroundColor Green
+Write-Host "Bridge summary complete! Saved to: $outputFile" -ForegroundColor Green

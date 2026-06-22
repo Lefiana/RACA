@@ -1,5 +1,5 @@
 // File: apps/frontend/app/(dashboard)/requests/page.tsx
-// CHANGED: added view toggle for approver roles
+// CHANGED: fixed viewMode param, added REVISION_REQUESTED status, added aria-label to select
 
 'use client';
 
@@ -15,27 +15,29 @@ const APPROVER_ROLES = new Set([
 ]);
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
-  DRAFT:         'Draft',
-  PENDING:       'Pending',
-  STAGE1_REVIEW: 'Stage 1 Review',
-  STAGE2_REVIEW: 'Stage 2 Review',
-  PENDING_FINAL: 'Pending Final',
-  APPROVED:      'Approved',
-  REJECTED:      'Rejected',
-  CANCELLED:     'Cancelled',
-  COMPLETED:     'Completed',
+  DRAFT:              'Draft',
+  PENDING:            'Pending',
+  STAGE1_REVIEW:      'Stage 1 Review',
+  STAGE2_REVIEW:      'Stage 2 Review',
+  PENDING_FINAL:      'Pending Final',
+  APPROVED:           'Approved',
+  REJECTED:           'Rejected',
+  CANCELLED:          'Cancelled',
+  COMPLETED:          'Completed',
+  REVISION_REQUESTED: 'Revision Requested',  // ← ADDED
 };
 
 const STATUS_COLORS: Record<RequestStatus, string> = {
-  DRAFT:         'bg-muted text-muted-foreground',
-  PENDING:       'bg-yellow-100 text-yellow-800',
-  STAGE1_REVIEW: 'bg-blue-100 text-blue-800',
-  STAGE2_REVIEW: 'bg-blue-100 text-blue-800',
-  PENDING_FINAL: 'bg-purple-100 text-purple-800',
-  APPROVED:      'bg-green-100 text-green-800',
-  REJECTED:      'bg-red-100 text-red-800',
-  CANCELLED:     'bg-muted text-muted-foreground',
-  COMPLETED:     'bg-green-100 text-green-800',
+  DRAFT:              'bg-muted text-muted-foreground',
+  PENDING:            'bg-yellow-100 text-yellow-800',
+  STAGE1_REVIEW:      'bg-blue-100 text-blue-800',
+  STAGE2_REVIEW:      'bg-blue-100 text-blue-800',
+  PENDING_FINAL:      'bg-purple-100 text-purple-800',
+  APPROVED:           'bg-green-100 text-green-800',
+  REJECTED:           'bg-red-100 text-red-800',
+  CANCELLED:          'bg-muted text-muted-foreground',
+  COMPLETED:          'bg-green-100 text-green-800',
+  REVISION_REQUESTED: 'bg-orange-100 text-orange-800',  // ← ADDED
 };
 
 export default function RequestsPage() {
@@ -50,14 +52,13 @@ export default function RequestsPage() {
   const isApprover  = APPROVER_ROLES.has(user?.role ?? '');
   const isAdmin     = user?.role === 'SUPER_ADMIN' || user?.role === 'SCHOOL_ADMIN';
 
-  // CHANGED: pass viewAs to the query so backend scopes correctly
+  // FIXED: use viewMode with correct backend values
   const { data, isLoading, isError } = useRequests({
     page,
     limit:  20,
     status,
     search: search || undefined,
-    // CHANGED: when approver is viewing 'assigned', don't filter by owner
-    viewAs: isApprover && view === 'assigned' ? 'approver' : 'owner',
+    viewMode: isApprover && view === 'assigned' ? 'for_my_review' : 'my_requests',
   });
 
   const handleSearch = (e: React.FormEvent) => {
@@ -131,6 +132,7 @@ export default function RequestsPage() {
         <select
           value={status ?? ''}
           onChange={e => { setStatus(e.target.value as RequestStatus || undefined); setPage(1); }}
+          aria-label="Filter by status"  // ← ADDED: fixes accessibility warning
           className="px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         >
           <option value="">All Statuses</option>

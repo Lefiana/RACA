@@ -25,6 +25,17 @@ export class UsersController {
     return this.usersService.findById(session.user.id);
   }
 
+  // ── NEW: Public advisers endpoint ───────────────────────────────────────────
+  @Get('advisers')
+  @ApiOperation({ summary: 'List active advisers (public, for requestor selection)' })
+  async getAdvisers() {
+    // No role guard — any authenticated user can call this
+    return this.usersService.findMany({
+      role: UserRole.ADVISER,
+      limit: 100,
+    });
+  }
+
   @Get()
   @ApiOperation({ summary: '[Admin] List all users' })
   async findAll(

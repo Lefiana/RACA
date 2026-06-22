@@ -1,5 +1,5 @@
 // File: apps/frontend/app/lib/users/api.ts
-// CHANGED: createUser signs up with withCredentials: false to prevent session overriding, then assigns role
+// CHANGED: added getAdvisers for public adviser listing
 
 import axios from 'axios';
 import { env } from '../../../env';
@@ -14,13 +14,8 @@ import type {
 
 // CHANGED: Two-step process — sign up via Better Auth without cookies, then assign role via admin client
 export async function createUser(dto: ICreateUserDto): Promise<IUser> {
-  // Step 1: Create account via Better Auth  
-  // NOTE: this does NOT override the current session because we use  
-  // a fresh axios instance without withCredentials for this call  
   const authClient = axios.create({
     baseURL: env.apiUrl.replace('/api/v1', ''),
-    // CHANGED: no withCredentials — prevents new user session from  
-    // overwriting the current super admin session cookie  
     withCredentials: false,
     headers: { 'Content-Type': 'application/json' },
   });
@@ -36,7 +31,6 @@ export async function createUser(dto: ICreateUserDto): Promise<IUser> {
   const userId = signUpRes.data?.user?.id;
   if (!userId) throw new Error('Sign up succeeded but no user ID returned');
 
-  // Step 2: Assign role — this uses the super admin session (apiClient)  
   const roleRes = await apiClient.patch<IUser>(`/users/${userId}/role`, {
     role: dto.role,
   });
@@ -46,6 +40,12 @@ export async function createUser(dto: ICreateUserDto): Promise<IUser> {
 
 export async function getUsers(query?: IUsersQuery): Promise<IUsersResponse> {
   const res = await apiClient.get<IUsersResponse>('/users', { params: query });
+  return res.data;
+}
+
+// ── NEW: Public advisers endpoint (no admin role required) ─────────────────
+export async function getAdvisers(): Promise<IUsersResponse> {
+  const res = await apiClient.get<IUsersResponse>('/users/advisers');
   return res.data;
 }
 
