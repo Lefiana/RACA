@@ -90,6 +90,7 @@ export default function UsersPage() {
         </form>
 
         <select
+          aria-label="Filter by role"
           value={role ?? ''}
           onChange={e => { setRole(e.target.value as UserRole || undefined); setPage(1); }}
           className="px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
@@ -291,6 +292,7 @@ function CreateUserModal({ onClose }: { onClose: () => void }) {
               Role <span className="text-destructive">*</span>
             </label>
             <select
+              aria-label="Filter by role"
               value={form.role}
               onChange={set('role')}
               className="w-full px-3 py-2 text-sm border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"

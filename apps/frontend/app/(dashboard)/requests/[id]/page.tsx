@@ -1,13 +1,13 @@
 // File: apps/frontend/app/(dashboard)/requests/[id]/page.tsx
 // CHANGED: Added REVISION_REQUESTED status, revision banner, resubmit flow,
 //          and revision action buttons for approvers
+// REMOVED: Submit button (submit happens on new request form only)
 'use client';
 
 import { useState, useEffect }   from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link                       from 'next/link';
-import { useRequest, useSubmitRequest, useCancelRequest, useResubmitRequest } from '../../../lib/requests/hooks';
-import { useRequestRevision }     from '../../../lib/approvals/hooks';
+import { useRequest, useCancelRequest, useResubmitRequest } from '../../../lib/requests/hooks';
 import { useCurrentUser }         from '../../../lib/auth/hooks';
 import { DecideModal }            from '../../approvals/decide-modal';
 import type { RequestStatus }     from '../../../lib/requests/types';
@@ -24,7 +24,7 @@ const STATUS_COLORS: Record<RequestStatus, string> = {
   REJECTED:           'bg-red-100 text-red-800',
   CANCELLED:          'bg-muted text-muted-foreground',
   COMPLETED:          'bg-green-100 text-green-800',
-  REVISION_REQUESTED: 'bg-amber-100 text-amber-800', // ← NEW
+  REVISION_REQUESTED: 'bg-amber-100 text-amber-800',
 };
 
 // CHANGED: Added REVISION_REQUESTED, SUSPENDED
@@ -33,8 +33,8 @@ const STEP_STATUS_COLORS: Record<string, string> = {
   APPROVED:           'bg-green-100 text-green-800',
   REJECTED:           'bg-red-100 text-red-800',
   SKIPPED:            'bg-muted text-muted-foreground',
-  REVISION_REQUESTED: 'bg-amber-100 text-amber-800', // ← NEW
-  SUSPENDED:          'bg-orange-100 text-orange-800', // ← NEW
+  REVISION_REQUESTED: 'bg-amber-100 text-amber-800',
+  SUSPENDED:          'bg-orange-100 text-orange-800',
 };
 
 export default function RequestDetailPage() {
@@ -44,9 +44,8 @@ export default function RequestDetailPage() {
   const { user }         = useCurrentUser();
 
   const { data: request, isLoading, isError, error, refetch } = useRequest(id);
-  const submitRequest  = useSubmitRequest();
   const cancelRequest  = useCancelRequest();
-  const resubmitRequest = useResubmitRequest(id); // ← NEW
+  const resubmitRequest = useResubmitRequest(id);
 
   // Modal state — CHANGED: added revision modes
   const [modalStep, setModalStep]   = useState<IApprovalStep | null>(null);
@@ -93,26 +92,13 @@ export default function RequestDetailPage() {
 
   const isOwner   = user?.id === request.requestedById;
   const canEdit   = isOwner && (request.status === 'DRAFT' || request.status === 'PENDING');
-  const canSubmit = isOwner && request.status === 'DRAFT';
   const canCancel = isOwner && (request.status === 'DRAFT' || request.status === 'PENDING');
-  const canResubmit = isOwner && request.status === 'REVISION_REQUESTED'; // ← NEW
+  const canResubmit = isOwner && request.status === 'REVISION_REQUESTED';
 
   // Find the step this user can act on
   const myPendingStep = request.approvalSteps?.find(
     s => s.status === 'PENDING' && (s.approverId === user?.id),
   ) as IApprovalStep | undefined;
-
-  // ── NEW: Find any step this user can request revision on ────────────────
-  const myActionableStep = request.approvalSteps?.find(
-    s => s.status === 'PENDING' && s.approverId === user?.id,
-  ) as IApprovalStep | undefined;
-
-  const handleSubmit = async () => {
-    // NOTE: Your existing code passes just `id`. If this is wrong for your API,
-    // change to: await submitRequest.mutateAsync({ id, adviserId: '...' });
-    await submitRequest.mutateAsync(id);
-    refetch();
-  };
 
   const handleCancel = async () => {
     if (!confirm('Are you sure you want to cancel this request?')) return;
@@ -120,14 +106,13 @@ export default function RequestDetailPage() {
     router.push('/requests');
   };
 
-  // ── NEW: Handle resubmit ────────────────────────────────────────────────
   const handleResubmit = async () => {
     if (!confirm('Are you sure you want to resubmit this request?')) return;
     await resubmitRequest.mutateAsync({});
     refetch();
   };
 
-  // ── NEW: Get revision info ──────────────────────────────────────────────
+  // Get revision info
   const triggeringStep = request.approvalSteps?.find(
     s => s.status === 'REVISION_REQUESTED',
   );
@@ -147,7 +132,7 @@ export default function RequestDetailPage() {
         />
       )}
 
-      {/* ── NEW: Revision Requested Banner ───────────────────────────────── */}
+      {/* Revision Requested Banner */}
       {request.status === 'REVISION_REQUESTED' && (
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
           <div className="flex items-start gap-3">
@@ -191,14 +176,12 @@ export default function RequestDetailPage() {
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[request.status]}`}>
               {request.status.replace(/_/g, ' ')}
             </span>
-            {/* ── NEW: Show revision count if any ───────────────────────── */}
             {request.revisionCount > 0 && (
               <span className="text-xs text-muted-foreground">
                 (Revision #{request.revisionCount})
               </span>
             )}
           </div>
-          {/* ── NEW: Show approval group ───────────────────────────────── */}
           {request.approvalGroup && (
             <p className="text-xs text-muted-foreground mt-1">
               Approval Group: {request.approvalGroup.replace(/_/g, ' ')}
@@ -207,7 +190,7 @@ export default function RequestDetailPage() {
         </div>
 
         <div className="flex gap-2 flex-wrap justify-end">
-          {/* Approver actions — CHANGED: added revision buttons */}
+          {/* Approver actions */}
           {myPendingStep && (
             <>
               <button
@@ -216,7 +199,6 @@ export default function RequestDetailPage() {
               >
                 Reject
               </button>
-              {/* ── NEW: Request Revision dropdown ─────────────────────── */}
               <div className="relative group">
                 <button className="px-3 py-2 text-sm border border-amber-500/50 text-amber-700 rounded-md hover:bg-amber-50 transition-colors">
                   ↺ Revision
@@ -245,7 +227,7 @@ export default function RequestDetailPage() {
             </>
           )}
 
-          {/* Owner actions — CHANGED: added resubmit */}
+          {/* Owner actions */}
           {canEdit && (
             <Link
               href={`/requests/${id}/edit`}
@@ -253,15 +235,6 @@ export default function RequestDetailPage() {
             >
               Edit
             </Link>
-          )}
-          {canSubmit && (
-            <button
-              onClick={handleSubmit}
-              disabled={submitRequest.isPending}
-              className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            >
-              {submitRequest.isPending ? 'Submitting...' : 'Submit'}
-            </button>
           )}
           {canResubmit && (
             <button
@@ -392,7 +365,6 @@ export default function RequestDetailPage() {
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STEP_STATUS_COLORS[step.status]}`}>
                       {step.status.replace(/_/g, ' ')}
                     </span>
-                    {/* Action buttons for this user's pending step */}
                     {step.status === 'PENDING' && step.approverId === user?.id && (
                       <div className="flex gap-1 ml-auto">
                         <button
@@ -401,7 +373,6 @@ export default function RequestDetailPage() {
                         >
                           Reject
                         </button>
-                        {/* ── NEW: Revision button on each step ─────────── */}
                         <div className="relative group">
                           <button className="px-2 py-0.5 text-xs border border-amber-500/50 text-amber-700 rounded hover:bg-amber-50 transition-colors">
                             ↺
@@ -444,7 +415,6 @@ export default function RequestDetailPage() {
                       Reason: {step.rejectionReason}
                     </p>
                   )}
-                  {/* ── NEW: Show revision info on step ─────────────────── */}
                   {step.status === 'REVISION_REQUESTED' && step.revisionType && (
                     <p className="text-xs text-amber-700 mt-1">
                       Revision type: {step.revisionType.replace(/_/g, ' ')}
